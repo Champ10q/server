@@ -14,10 +14,12 @@ use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\EventDispatcher\IEventDispatcher;
 use OCP\Files\Events\NodeAddedToFavorite;
 use OCP\Files\Events\NodeRemovedFromFavorite;
+use OCP\Files\Folder;
 use OCP\IDBConnection;
 use OCP\ITags;
-use OCP\IUserSession;
-use OCP\Share_Backend;
+use OCP\IUserManager;
+use OCP\Server;
+use OCP\Util;
 use Psr\Log\LoggerInterface;
 
 class Tags implements ITags {
@@ -28,21 +30,10 @@ class Tags implements ITags {
 	private array $tags = [];
 
 	/**
-	 * Are we including tags for shared items?
-	 */
-	private bool $includeShared = false;
-
-	/**
 	 * The current user, plus any owners of the items shared with the current
 	 * user, if $this->includeShared === true.
 	 */
 	private array $owners = [];
-
-	/**
-	 * The sharing backend for objects of $this->type. Required if
-	 * $this->includeShared === true to determine ownership of items.
-	 */
-	private ?Share_Backend $backend = null;
 
 	public const TAG_TABLE = 'vcategory';
 	public const RELATION_TABLE = 'vcategory_to_object';
@@ -64,7 +55,8 @@ class Tags implements ITags {
 		private LoggerInterface $logger,
 		private IDBConnection $db,
 		private IEventDispatcher $dispatcher,
-		private IUserSession $userSession,
+		private IUserManager $userManager,
+		private Folder $userFolder,
 		array $defaultTags = [],
 	) {
 		$this->owners = [$this->user];
@@ -210,7 +202,7 @@ class Tags implements ITags {
 		}
 
 		if ($tagId === false) {
-			$l10n = \OCP\Util::getL10N('core');
+			$l10n = Util::getL10N('core');
 			throw new \Exception(
 				$l10n->t('Could not find category "%s"', [$tag])
 			);
@@ -273,7 +265,6 @@ class Tags implements ITags {
 			return false;
 		}
 		if ($this->userHasTag($name, $this->user)) {
-			// TODO use unique db properties instead of an additional check
 			$this->logger->debug(__METHOD__ . ' Tag with name already exists', ['app' => 'core']);
 			return false;
 		}
@@ -289,7 +280,7 @@ class Tags implements ITags {
 			return false;
 		}
 		$this->logger->debug(__METHOD__ . ' Added an tag with ' . $tag->getId(), ['app' => 'core']);
-		return $tag->getId();
+		return $tag->getId() ?? false;
 	}
 
 	/**
@@ -460,7 +451,7 @@ class Tags implements ITags {
 		try {
 			return $this->getIdsForTag(ITags::TAG_FAVORITE);
 		} catch (\Exception $e) {
-			\OCP\Server::get(LoggerInterface::class)->error(
+			Server::get(LoggerInterface::class)->error(
 				$e->getMessage(),
 				[
 					'app' => 'core',
@@ -496,12 +487,8 @@ class Tags implements ITags {
 
 	/**
 	 * Creates a tag/object relation.
-	 *
-	 * @param int $objid The id of the object
-	 * @param string $tag The id or name of the tag
-	 * @return boolean Returns false on error.
 	 */
-	public function tagAs($objid, $tag, string $path = '') {
+	public function tagAs($objid, $tag, ?string $path = null) {
 		if (is_string($tag) && !is_numeric($tag)) {
 			$tag = trim($tag);
 			if ($tag === '') {
@@ -525,26 +512,31 @@ class Tags implements ITags {
 		try {
 			$qb->executeStatement();
 		} catch (\Exception $e) {
-			\OCP\Server::get(LoggerInterface::class)->error($e->getMessage(), [
+			Server::get(LoggerInterface::class)->error($e->getMessage(), [
 				'app' => 'core',
 				'exception' => $e,
 			]);
 			return false;
 		}
 		if ($tag === ITags::TAG_FAVORITE) {
-			$this->dispatcher->dispatchTyped(new NodeAddedToFavorite($this->userSession->getUser(), $objid, $path));
+			if ($path === null) {
+				$node = $this->userFolder->getFirstNodeById($objid);
+				if ($node !== null) {
+					$path = $node->getPath();
+				} else {
+					throw new Exception('Failed to favorite: node with id ' . $objid . ' not found');
+				}
+			}
+
+			$this->dispatcher->dispatchTyped(new NodeAddedToFavorite($this->userManager->getExistingUser($this->user), $objid, $path));
 		}
 		return true;
 	}
 
 	/**
 	 * Delete single tag/object relation from the db
-	 *
-	 * @param int $objid The id of the object
-	 * @param string $tag The id or name of the tag
-	 * @return boolean
 	 */
-	public function unTag($objid, $tag, string $path = '') {
+	public function unTag($objid, $tag, ?string $path = null) {
 		if (is_string($tag) && !is_numeric($tag)) {
 			$tag = trim($tag);
 			if ($tag === '') {
@@ -572,7 +564,16 @@ class Tags implements ITags {
 			return false;
 		}
 		if ($tag === ITags::TAG_FAVORITE) {
-			$this->dispatcher->dispatchTyped(new NodeRemovedFromFavorite($this->userSession->getUser(), $objid, $path));
+			if ($path === null) {
+				$node = $this->userFolder->getFirstNodeById($objid);
+				if ($node !== null) {
+					$path = $node->getPath();
+				} else {
+					throw new Exception('Failed to unfavorite: node with id ' . $objid . ' not found');
+				}
+			}
+
+			$this->dispatcher->dispatchTyped(new NodeRemovedFromFavorite($this->userManager->getExistingUser($this->user), $objid, $path));
 		}
 		return true;
 	}
@@ -634,7 +635,8 @@ class Tags implements ITags {
 		return array_search(strtolower($needle), array_map(
 			function ($tag) use ($mem) {
 				return strtolower(call_user_func([$tag, $mem]));
-			}, $haystack)
+			}, $haystack),
+			true
 		);
 	}
 

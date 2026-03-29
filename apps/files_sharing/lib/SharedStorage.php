@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -35,9 +36,14 @@ use OCP\Files\Storage\IDisableEncryptionStorage;
 use OCP\Files\Storage\ILockingStorage;
 use OCP\Files\Storage\ISharedStorage;
 use OCP\Files\Storage\IStorage;
+use OCP\IAppConfig;
+use OCP\IUserSession;
 use OCP\Lock\ILockingProvider;
+use OCP\Server;
+use OCP\Share\IManager as IShareManager;
 use OCP\Share\IShare;
 use OCP\Util;
+use Override;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -79,18 +85,16 @@ class SharedStorage extends Jail implements LegacyISharedStorage, ISharedStorage
 	private $ownerUserFolder = null;
 
 	private string $sourcePath = '';
+	private IAppConfig $appConfig;
+	private IShareManager $shareManager;
 
 	private static int $initDepth = 0;
 
-	/**
-	 * @psalm-suppress NonInvariantDocblockPropertyType
-	 * @var ?Storage $storage
-	 */
-	protected $storage;
-
 	public function __construct(array $parameters) {
 		$this->ownerView = $parameters['ownerView'];
-		$this->logger = \OC::$server->get(LoggerInterface::class);
+		$this->logger = Server::get(LoggerInterface::class);
+		$this->appConfig = Server::get(IAppConfig::class);
+		$this->shareManager = Server::get(IShareManager::class);
 
 		$this->superShare = $parameters['superShare'];
 		$this->groupedShares = $parameters['groupedShares'];
@@ -133,8 +137,9 @@ class SharedStorage extends Jail implements LegacyISharedStorage, ISharedStorage
 				// this is probably because some code path has caused recursion during the share setup
 				// we setup a "failed storage" so `getWrapperStorage` doesn't return null.
 				// If the share setup completes after this the "failed storage" will be overwritten by the correct one
-				$this->logger->warning('Possible share setup recursion detected');
-				$this->storage = new FailedStorage(['exception' => new \Exception('Possible share setup recursion detected')]);
+				$ex = new \Exception('Possible share setup recursion detected for share ' . $this->superShare->getId());
+				$this->logger->warning($ex->getMessage(), ['exception' => $ex, 'app' => 'files_sharing']);
+				$this->storage = new FailedStorage(['exception' => $ex]);
 				$this->cache = new FailedCache();
 				$this->rootPath = '';
 			}
@@ -150,7 +155,7 @@ class SharedStorage extends Jail implements LegacyISharedStorage, ISharedStorage
 			}
 
 			/** @var IRootFolder $rootFolder */
-			$rootFolder = \OC::$server->get(IRootFolder::class);
+			$rootFolder = Server::get(IRootFolder::class);
 			$this->ownerUserFolder = $rootFolder->getUserFolder($this->superShare->getShareOwner());
 			$sourceId = $this->superShare->getNodeId();
 			$ownerNodes = $this->ownerUserFolder->getById($sourceId);
@@ -281,7 +286,8 @@ class SharedStorage extends Jail implements LegacyISharedStorage, ISharedStorage
 	}
 
 	public function isSharable(string $path): bool {
-		if (Util::isSharingDisabledForUser() || !Share::isResharingAllowed()) {
+		if ($this->shareManager->sharingDisabledForUser(Server::get(IUserSession::class)->getUser()?->getUID())
+			|| !$this->appConfig->getValueBool('core', 'shareapi_allow_resharing', true)) {
 			return false;
 		}
 		return (bool)($this->getPermissions($path) & Constants::PERMISSION_SHARE);
@@ -412,7 +418,7 @@ class SharedStorage extends Jail implements LegacyISharedStorage, ISharedStorage
 		$this->cache = new Cache(
 			$storage,
 			$sourceRoot,
-			\OC::$server->get(CacheDependencies::class),
+			Server::get(CacheDependencies::class),
 			$this->getShare()
 		);
 		return $this->cache;
@@ -437,11 +443,15 @@ class SharedStorage extends Jail implements LegacyISharedStorage, ISharedStorage
 		// Get node information
 		$node = $this->getShare()->getNodeCacheEntry();
 		if ($node instanceof CacheEntry) {
-			$storageId = $node->getData()['storage_string_id'];
+			$storageId = $node->getData()['storage_string_id'] ?? null;
 			// for shares from the home storage we can rely on the home storage to keep itself up to date
 			// for other storages we need use the proper watcher
-			if (!(str_starts_with($storageId, 'home::') || str_starts_with($storageId, 'object::user'))) {
+			if ($storageId !== null && !(str_starts_with($storageId, 'home::') || str_starts_with($storageId, 'object::user'))) {
+				$cache = $this->getCache();
 				$this->watcher = parent::getWatcher($path, $storage);
+				if ($cache instanceof Cache) {
+					$this->watcher->onUpdate($cache->markRootChanged(...));
+				}
 				return $this->watcher;
 			}
 		}
@@ -458,7 +468,7 @@ class SharedStorage extends Jail implements LegacyISharedStorage, ISharedStorage
 	 */
 	public function unshareStorage(): bool {
 		foreach ($this->groupedShares as $share) {
-			\OC::$server->getShareManager()->deleteFromSelf($share, $this->user);
+			Server::get(IShareManager::class)->deleteFromSelf($share, $this->user);
 		}
 		return true;
 	}
@@ -549,5 +559,17 @@ class SharedStorage extends Jail implements LegacyISharedStorage, ISharedStorage
 	public function getUnjailedPath(string $path): string {
 		$this->init();
 		return parent::getUnjailedPath($path);
+	}
+
+	#[Override]
+	public function getDirectDownload(string $path): array|false {
+		// disable direct download for shares
+		return false;
+	}
+
+	#[Override]
+	public function getDirectDownloadById(string $fileId): array|false {
+		// disable direct download for shares
+		return false;
 	}
 }

@@ -1,4 +1,7 @@
 <?php
+
+declare(strict_types=1);
+
 /**
  * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -16,7 +19,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class UpdateConfig extends Command {
 	public const SUPPORTED_KEYS = [
-		'name', 'url', 'imprintUrl', 'privacyUrl', 'slogan', 'color', 'primary_color', 'disable-user-theming'
+		'name', 'url', 'imprintUrl', 'privacyUrl', 'slogan', 'color', 'primary_color', 'background_color', 'disable-user-theming'
 	];
 
 	public function __construct(
@@ -34,8 +37,8 @@ class UpdateConfig extends Command {
 			->addArgument(
 				'key',
 				InputArgument::OPTIONAL,
-				'Key to update the theming app configuration (leave empty to get a list of all configured values)' . PHP_EOL .
-				'One of: ' . implode(', ', self::SUPPORTED_KEYS)
+				'Key to update the theming app configuration (leave empty to get a list of all configured values)' . PHP_EOL
+				. 'One of: ' . implode(', ', self::SUPPORTED_KEYS)
 			)
 			->addArgument(
 				'value',

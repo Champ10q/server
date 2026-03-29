@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { User } from '@nextcloud/cypress'
-import { handlePasswordConfirmation } from './usersUtils'
+import { User } from '@nextcloud/e2e-test-server/cypress'
+import { handlePasswordConfirmation } from './usersUtils.ts'
 
 const admin = new User('admin', 'admin')
 
@@ -140,6 +140,34 @@ describe('Settings: App management', { testIsolation: true }, () => {
 		cy.get('#app-sidebar-vue').find('input[type="button"][value="Enable"]').should('be.visible')
 		cy.get('#app-sidebar-vue').find('input[type="button"][value="Remove"]').should('be.visible')
 		cy.get('#app-sidebar-vue').contains(/Version \d+\.\d+\.\d+/).should('be.visible')
+	})
+
+	it('Limit app usage to group', () => {
+		// When I open the "Active apps" section
+		cy.get('#app-category-enabled a')
+			.should('contain', 'Active apps')
+			.click({ force: true })
+		// Then I see that the current section is "Active apps"
+		cy.url().should('match', /settings\/apps\/enabled$/)
+		cy.get('#app-category-enabled').find('.active').should('exist')
+		// Then I select the app
+		cy.get('#apps-list')
+			.should('exist')
+			.contains('tr', 'Dashboard', { timeout: 10000 })
+			.click()
+		// Then I enable "limit app to group"
+		cy.get('[for="groups_enable_dashboard"]').click()
+		// Then I select a group
+		cy.get('#limitToGroups').click()
+		cy.get('ul[role="listbox"]')
+			.find('span')
+			.contains('admin')
+			.click()
+		cy.get('span.name-parts__first')
+			.contains('admin')
+			.should('be.visible')
+		// Then I disable the group limitation
+		cy.get('button[title="Deselect admin"]').click()
 	})
 
 	/*

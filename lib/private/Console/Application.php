@@ -20,6 +20,7 @@ use OCP\IConfig;
 use OCP\IRequest;
 use OCP\Server;
 use OCP\ServerVersion;
+use OCP\Util;
 use Psr\Container\ContainerExceptionInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Application as SymfonyApplication;
@@ -74,21 +75,21 @@ class Application {
 
 		if ($this->memoryInfo->isMemoryLimitSufficient() === false) {
 			$output->getErrorOutput()->writeln(
-				'<comment>The current PHP memory limit ' .
-				'is below the recommended value of 512MB.</comment>'
+				'<comment>The current PHP memory limit '
+				. 'is below the recommended value of 512MB.</comment>'
 			);
 		}
 
 		try {
 			require_once __DIR__ . '/../../../core/register_command.php';
 			if ($this->config->getSystemValueBool('installed', false)) {
-				if (\OCP\Util::needUpgrade()) {
+				if (Util::needUpgrade()) {
 					throw new NeedsUpdateException();
 				} elseif ($this->config->getSystemValueBool('maintenance')) {
 					$this->writeMaintenanceModeInfo($input, $output);
 				} else {
 					$this->appManager->loadApps();
-					foreach ($this->appManager->getInstalledApps() as $app) {
+					foreach ($this->appManager->getEnabledApps() as $app) {
 						try {
 							$appPath = $this->appManager->getAppPath($app);
 						} catch (AppPathNotFoundException) {
@@ -125,7 +126,7 @@ class Application {
 				$errorOutput->writeln('Nextcloud is not installed - only a limited number of commands are available');
 			}
 		} catch (NeedsUpdateException) {
-			if ($input->getArgument('command') !== '_completion') {
+			if ($input->getArgument('command') !== '_completion' && $input->getArgument('command') !== 'upgrade') {
 				$errorOutput = $output->getErrorOutput();
 				$errorOutput->writeln('Nextcloud or one of the apps require upgrade - only a limited number of commands are available');
 				$errorOutput->writeln('You may use your browser or the occ upgrade command to do the upgrade');

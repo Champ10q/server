@@ -3,13 +3,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { t } from '@nextcloud/l10n'
 import Vue from 'vue'
-import { translate as t } from '@nextcloud/l10n'
-
-import { registerWidget, registerCustomPickerElement, NcCustomPickerRenderResult } from '@nextcloud/vue/dist/Components/NcRichText.js'
-
-import FileWidget from './views/ReferenceFileWidget.vue'
+import { NcCustomPickerRenderResult, registerCustomPickerElement, registerWidget } from '@nextcloud/vue/components/NcRichText'
 import FileReferencePickerElement from './views/FileReferencePickerElement.vue'
+import FileWidget from './views/ReferenceFileWidget.vue'
 
 Vue.mixin({
 	methods: {

@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2017 ownCloud, Inc.
@@ -11,13 +12,13 @@ use OCA\Files_Sharing\Tests\TestCase;
 use OCP\IConfig;
 use OCP\IDBConnection;
 use OCP\Migration\IOutput;
+use OCP\Server;
 use OCP\Share\IShare;
 
 /**
  * Class SetPasswordColumnTest
- *
- * @group DB
  */
+#[\PHPUnit\Framework\Attributes\Group(name: 'DB')]
 class SetPasswordColumnTest extends TestCase {
 
 	/** @var IDBConnection */
@@ -34,7 +35,7 @@ class SetPasswordColumnTest extends TestCase {
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->connection = \OC::$server->getDatabaseConnection();
+		$this->connection = Server::get(IDBConnection::class);
 		$this->config = $this->createMock(IConfig::class);
 		$this->migration = new SetPasswordColumn($this->connection, $this->config);
 
@@ -48,7 +49,7 @@ class SetPasswordColumnTest extends TestCase {
 
 	private function cleanDB() {
 		$query = $this->connection->getQueryBuilder();
-		$query->delete($this->table)->execute();
+		$query->delete($this->table)->executeStatement();
 	}
 
 	public function testAddPasswordColumn(): void {
@@ -78,7 +79,7 @@ class SetPasswordColumnTest extends TestCase {
 						'stime' => $query->createNamedParameter(time()),
 					]);
 
-				$this->assertSame(1, $query->execute());
+				$this->assertSame(1, $query->executeStatement());
 			}
 		}
 
@@ -89,8 +90,8 @@ class SetPasswordColumnTest extends TestCase {
 		$query = $this->connection->getQueryBuilder();
 		$query->select('*')
 			->from('share');
-		$result = $query->execute();
-		$allShares = $result->fetchAll();
+		$result = $query->executeQuery();
+		$allShares = $result->fetchAllAssociative();
 		$result->closeCursor();
 
 		foreach ($allShares as $share) {

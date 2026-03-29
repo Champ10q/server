@@ -75,7 +75,7 @@ class Message implements IMessage {
 			return [];
 		}
 
-		array_walk($addresses, function ($readableName, $email) use (&$convertedAddresses) {
+		array_walk($addresses, function ($readableName, $email) use (&$convertedAddresses): void {
 			if (is_numeric($email)) {
 				$convertedAddresses[] = new Address($readableName);
 			} else {
@@ -316,7 +316,7 @@ class Message implements IMessage {
 	public function getAutoSubmitted(): string {
 		$headers = $this->symfonyEmail->getHeaders();
 
-		return $headers->has(AutoSubmitted::HEADER) ?
-			$headers->get(AutoSubmitted::HEADER)->getBodyAsString() : AutoSubmitted::VALUE_NO;
+		return $headers->has(AutoSubmitted::HEADER)
+			? $headers->get(AutoSubmitted::HEADER)->getBodyAsString() : AutoSubmitted::VALUE_NO;
 	}
 }

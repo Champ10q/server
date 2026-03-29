@@ -22,25 +22,12 @@ use OCP\Util;
 use Psr\Log\LoggerInterface;
 
 class Store implements IStore {
-	/** @var ISession */
-	private $session;
-
-	/** @var LoggerInterface */
-	private $logger;
-
-	/** @var IProvider|null */
-	private $tokenProvider;
-
 	public function __construct(
-		ISession $session,
-		LoggerInterface $logger,
+		private ISession $session,
+		private LoggerInterface $logger,
 		private readonly ICrypto $crypto,
-		?IProvider $tokenProvider = null,
+		private ?IProvider $tokenProvider = null,
 	) {
-		$this->session = $session;
-		$this->logger = $logger;
-		$this->tokenProvider = $tokenProvider;
-
 		Util::connectHook('OC_User', 'post_login', $this, 'authenticate');
 	}
 
@@ -50,7 +37,9 @@ class Store implements IStore {
 	 * @param array $params
 	 */
 	public function authenticate(array $params) {
-		$params['password'] = $this->crypto->encrypt((string)$params['password']);
+		if ($params['password'] !== null) {
+			$params['password'] = $this->crypto->encrypt((string)$params['password']);
+		}
 		$this->session->set('login_credentials', json_encode($params));
 	}
 
@@ -97,10 +86,12 @@ class Store implements IStore {
 		if ($trySession && $this->session->exists('login_credentials')) {
 			/** @var array $creds */
 			$creds = json_decode($this->session->get('login_credentials'), true);
-			try {
-				$creds['password'] = $this->crypto->decrypt($creds['password']);
-			} catch (Exception $e) {
-				//decryption failed, continue with old password as it is
+			if ($creds['password'] !== null) {
+				try {
+					$creds['password'] = $this->crypto->decrypt($creds['password']);
+				} catch (Exception $e) {
+					//decryption failed, continue with old password as it is
+				}
 			}
 			return new Credentials(
 				$creds['uid'],

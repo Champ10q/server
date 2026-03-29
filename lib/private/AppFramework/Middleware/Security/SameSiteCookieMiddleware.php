@@ -1,4 +1,7 @@
 <?php
+
+declare(strict_types=1);
+
 /**
  * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -6,23 +9,19 @@
 namespace OC\AppFramework\Middleware\Security;
 
 use OC\AppFramework\Http\Request;
+use OC\AppFramework\Middleware\MiddlewareUtils;
 use OC\AppFramework\Middleware\Security\Exceptions\LaxSameSiteCookieFailedException;
-use OC\AppFramework\Utility\ControllerMethodReflector;
 use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\Attribute\NoSameSiteCookieRequired;
 use OCP\AppFramework\Http\Response;
 use OCP\AppFramework\Middleware;
+use ReflectionMethod;
 
 class SameSiteCookieMiddleware extends Middleware {
-	/** @var Request */
-	private $request;
-
-	/** @var ControllerMethodReflector */
-	private $reflector;
-
-	public function __construct(Request $request,
-		ControllerMethodReflector $reflector) {
-		$this->request = $request;
-		$this->reflector = $reflector;
+	public function __construct(
+		private readonly Request $request,
+		private readonly MiddlewareUtils $middlewareUtils,
+	) {
 	}
 
 	public function beforeController($controller, $methodName) {
@@ -34,7 +33,8 @@ class SameSiteCookieMiddleware extends Middleware {
 			return;
 		}
 
-		$noSSC = $this->reflector->hasAnnotation('NoSameSiteCookieRequired');
+		$reflectionMethod = new ReflectionMethod($controller, $methodName);
+		$noSSC = $this->middlewareUtils->hasAnnotationOrAttribute($reflectionMethod, 'NoSameSiteCookieRequired', NoSameSiteCookieRequired::class);
 		if ($noSSC) {
 			return;
 		}
@@ -58,7 +58,7 @@ class SameSiteCookieMiddleware extends Middleware {
 		throw $exception;
 	}
 
-	protected function setSameSiteCookie() {
+	protected function setSameSiteCookie(): void {
 		$cookieParams = $this->request->getCookieParams();
 		$secureCookie = ($cookieParams['secure'] === true) ? 'secure; ' : '';
 		$policies = [

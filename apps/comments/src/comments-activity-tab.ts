@@ -1,13 +1,15 @@
-/**
+/*!
  * SPDX-FileCopyrightText: 2023 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
+import type { INode } from '@nextcloud/files'
+
 import moment from '@nextcloud/moment'
+import { createPinia, PiniaVuePlugin } from 'pinia'
 import Vue, { type ComponentPublicInstance } from 'vue'
 import logger from './logger.js'
 import { getComments } from './services/GetComments.js'
-
-import { PiniaVuePlugin, createPinia } from 'pinia'
 
 Vue.use(PiniaVuePlugin)
 
@@ -19,7 +21,7 @@ let ActivityTabPluginInstance
  */
 export function registerCommentsPlugins() {
 	window.OCA.Activity.registerSidebarAction({
-		mount: async (el, { context, fileInfo, reload }) => {
+		mount: async (el: HTMLElement, { node, reload }: { node: INode, reload: () => void }) => {
 			const pinia = createPinia()
 
 			if (!ActivityTabPluginView) {
@@ -29,14 +31,13 @@ export function registerCommentsPlugins() {
 			}
 			ActivityTabPluginInstance = new ActivityTabPluginView({
 				el,
-				parent: context,
 				pinia,
 				propsData: {
 					reloadCallback: reload,
-					resourceId: fileInfo.id,
+					resourceId: node.fileid,
 				},
 			})
-			logger.info('Comments plugin mounted in Activity sidebar action', { fileInfo })
+			logger.info('Comments plugin mounted in Activity sidebar action', { node })
 		},
 		unmount: () => {
 			// destroy previous instance if available
@@ -46,9 +47,15 @@ export function registerCommentsPlugins() {
 		},
 	})
 
-	window.OCA.Activity.registerSidebarEntries(async ({ fileInfo, limit, offset }) => {
-		const { data: comments } = await getComments({ resourceType: 'files', resourceId: fileInfo.id }, { limit, offset })
-		logger.debug('Loaded comments', { fileInfo, comments })
+	window.OCA.Activity.registerSidebarEntries(async ({ node, limit, offset }: { node: INode, limit?: number, offset?: number }) => {
+		const { data: comments } = await getComments(
+			{ resourceType: 'files', resourceId: node.fileid },
+			{
+				limit,
+				offset: offset ?? 0,
+			},
+		)
+		logger.debug('Loaded comments', { node, comments })
 		const { default: CommentView } = await import('./views/ActivityCommentEntry.vue')
 		// @ts-expect-error Types are broken for Vue2
 		const CommentsViewObject = Vue.extend(CommentView)
@@ -58,13 +65,12 @@ export function registerCommentsPlugins() {
 
 			timestamp: moment(comment.props?.creationDateTime).toDate().getTime(),
 
-			mount(element: HTMLElement, { context, reload }) {
+			mount(element: HTMLElement, { reload }) {
 				this._CommentsViewInstance = new CommentsViewObject({
 					el: element,
-					parent: context,
 					propsData: {
 						comment,
-						resourceId: fileInfo.id,
+						resourceId: node.fileid,
 						reloadCallback: reload,
 					},
 				})

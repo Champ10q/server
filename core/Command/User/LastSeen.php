@@ -68,7 +68,7 @@ class LastSeen extends Base {
 			return 1;
 		}
 
-		$this->userManager->callForAllUsers(static function (IUser $user) use ($output) {
+		$this->userManager->callForAllUsers(static function (IUser $user) use ($output): void {
 			$lastLogin = $user->getLastLogin();
 			if ($lastLogin === 0) {
 				$output->writeln($user->getUID() . ' has never logged in.');
@@ -88,7 +88,7 @@ class LastSeen extends Base {
 	 */
 	public function completeArgumentValues($argumentName, CompletionContext $context) {
 		if ($argumentName === 'uid') {
-			return array_map(static fn (IUser $user) => $user->getUID(), $this->userManager->search($context->getCurrentWord()));
+			return array_map(static fn (IUser $user) => $user->getUID(), $this->userManager->searchDisplayName($context->getCurrentWord()));
 		}
 		return [];
 	}

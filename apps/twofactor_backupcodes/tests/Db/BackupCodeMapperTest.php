@@ -12,34 +12,27 @@ use OCA\TwoFactorBackupCodes\Db\BackupCode;
 use OCA\TwoFactorBackupCodes\Db\BackupCodeMapper;
 use OCP\IDBConnection;
 use OCP\IUser;
+use OCP\Server;
 use Test\TestCase;
 
-/**
- * @group DB
- */
+#[\PHPUnit\Framework\Attributes\Group(name: 'DB')]
 class BackupCodeMapperTest extends TestCase {
-
-	/** @var IDBConnection */
-	private $db;
-
-	/** @var BackupCodeMapper */
-	private $mapper;
-
-	/** @var string */
-	private $testUID = 'test123456';
+	private IDBConnection $db;
+	private BackupCodeMapper $mapper;
+	private string $testUID = 'test123456';
 
 	private function resetDB() {
 		$qb = $this->db->getQueryBuilder();
 		$qb->delete($this->mapper->getTableName())
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($this->testUID)));
-		$qb->execute();
+		$qb->executeStatement();
 	}
 
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->db = \OC::$server->getDatabaseConnection();
-		$this->mapper = \OC::$server->query(BackupCodeMapper::class);
+		$this->db = Server::get(IDBConnection::class);
+		$this->mapper = Server::get(BackupCodeMapper::class);
 
 		$this->resetDB();
 	}

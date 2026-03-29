@@ -9,16 +9,16 @@ declare(strict_types=1);
 namespace OCA\DAV\Listener;
 
 use OCA\DAV\Connector\Sabre\Principal;
-use OCA\DAV\Events\CalendarObjectCreatedEvent;
-use OCA\DAV\Events\CalendarObjectUpdatedEvent;
 use OCA\DAV\Events\CalendarShareUpdatedEvent;
+use OCP\Calendar\Events\CalendarObjectCreatedEvent;
+use OCP\Calendar\Events\CalendarObjectUpdatedEvent;
 use OCP\Contacts\Events\ContactInteractedWithEvent;
 use OCP\EventDispatcher\Event;
 use OCP\EventDispatcher\IEventDispatcher;
 use OCP\EventDispatcher\IEventListener;
 use OCP\IUser;
 use OCP\IUserSession;
-use OCP\Mail\IMailer;
+use OCP\Mail\IEmailValidator;
 use Psr\Log\LoggerInterface;
 use Sabre\VObject\Component\VEvent;
 use Sabre\VObject\Parameter;
@@ -36,7 +36,7 @@ class CalendarContactInteractionListener implements IEventListener {
 		private IEventDispatcher $dispatcher,
 		private IUserSession $userSession,
 		private Principal $principalConnector,
-		private IMailer $mailer,
+		private IEmailValidator $emailValidator,
 		private LoggerInterface $logger,
 	) {
 	}
@@ -129,7 +129,7 @@ class CalendarContactInteractionListener implements IEventListener {
 				continue;
 			}
 			$email = substr($mailTo, strlen('mailto:'));
-			if (!$this->mailer->validateMailAddress($email)) {
+			if (!$this->emailValidator->isValid($email)) {
 				// This really isn't a valid email
 				continue;
 			}

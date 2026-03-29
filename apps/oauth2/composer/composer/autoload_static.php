@@ -7,14 +7,14 @@ namespace Composer\Autoload;
 class ComposerStaticInitOAuth2
 {
     public static $prefixLengthsPsr4 = array (
-        'O' => 
+        'O' =>
         array (
             'OCA\\OAuth2\\' => 11,
         ),
     );
 
     public static $prefixDirsPsr4 = array (
-        'OCA\\OAuth2\\' => 
+        'OCA\\OAuth2\\' =>
         array (
             0 => __DIR__ . '/..' . '/../lib',
         ),
@@ -23,6 +23,7 @@ class ComposerStaticInitOAuth2
     public static $classMap = array (
         'Composer\\InstalledVersions' => __DIR__ . '/..' . '/composer/InstalledVersions.php',
         'OCA\\OAuth2\\BackgroundJob\\CleanupExpiredAuthorizationCode' => __DIR__ . '/..' . '/../lib/BackgroundJob/CleanupExpiredAuthorizationCode.php',
+        'OCA\\OAuth2\\Command\\ImportLegacyOcClient' => __DIR__ . '/..' . '/../lib/Command/ImportLegacyOcClient.php',
         'OCA\\OAuth2\\Controller\\LoginRedirectorController' => __DIR__ . '/..' . '/../lib/Controller/LoginRedirectorController.php',
         'OCA\\OAuth2\\Controller\\OauthApiController' => __DIR__ . '/..' . '/../lib/Controller/OauthApiController.php',
         'OCA\\OAuth2\\Controller\\SettingsController' => __DIR__ . '/..' . '/../lib/Controller/SettingsController.php',

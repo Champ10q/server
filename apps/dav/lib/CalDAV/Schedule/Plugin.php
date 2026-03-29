@@ -12,6 +12,7 @@ use OCA\DAV\CalDAV\Calendar;
 use OCA\DAV\CalDAV\CalendarHome;
 use OCA\DAV\CalDAV\CalendarObject;
 use OCA\DAV\CalDAV\DefaultCalendarValidator;
+use OCA\DAV\CalDAV\Federation\FederatedCalendar;
 use OCA\DAV\CalDAV\TipBroker;
 use OCP\IConfig;
 use Psr\Log\LoggerInterface;
@@ -132,13 +133,13 @@ class Plugin extends \Sabre\CalDAV\Schedule\Plugin {
 	 * @param string $principal
 	 * @return array
 	 */
-	protected function getAddressesForPrincipal($principal) {
+	public function getAddressesForPrincipal($principal) {
 		$result = parent::getAddressesForPrincipal($principal);
 
 		if ($result === null) {
 			$result = [];
 		}
-		
+
 		// iterate through items and html decode values
 		foreach ($result as $key => $value) {
 			$result[$key] = urldecode($value);
@@ -165,6 +166,7 @@ class Plugin extends \Sabre\CalDAV\Schedule\Plugin {
 
 			// Do not generate iTip and iMip messages if scheduling is disabled for this message
 			if ($request->getHeader('x-nc-scheduling') === 'false') {
+				$this->logger->debug('Skipping scheduling messages for calendar object change because x-nc-scheduling header is set to false');
 				return;
 			}
 
@@ -172,8 +174,15 @@ class Plugin extends \Sabre\CalDAV\Schedule\Plugin {
 				return;
 			}
 
-			/** @var Calendar $calendarNode */
+			/** @var Calendar&ICalendar $calendarNode */
 			$calendarNode = $this->server->tree->getNodeForPath($calendarPath);
+
+			// abort if calendar is federated
+			if ($calendarNode instanceof FederatedCalendar) {
+				$this->logger->debug('Not processing scheduling for federated calendar at path: ' . $calendarPath);
+				return;
+			}
+
 			// extract addresses for owner
 			$addresses = $this->getAddressesForPrincipal($calendarNode->getOwner());
 			// determine if request is from a sharee
@@ -197,12 +206,12 @@ class Plugin extends \Sabre\CalDAV\Schedule\Plugin {
 			}
 			// process request
 			$this->processICalendarChange($currentObject, $vCal, $addresses, [], $modified);
-	
+
 			if ($currentObject) {
 				// Destroy circular references so PHP will GC the object.
 				$currentObject->destroy();
 			}
-			
+
 		} catch (SameOrganizerForAllComponentsException $e) {
 			$this->handleSameOrganizerException($e, $vCal, $calendarPath);
 		}
@@ -212,6 +221,13 @@ class Plugin extends \Sabre\CalDAV\Schedule\Plugin {
 	 * @inheritDoc
 	 */
 	public function beforeUnbind($path): void {
+
+		// Do not generate iTip and iMip messages if scheduling is disabled for this message
+		if ($this->server->httpRequest->getHeader('x-nc-scheduling') === 'false') {
+			$this->logger->debug('Skipping scheduling messages for calendar object delete because x-nc-scheduling header is set to false');
+			return;
+		}
+
 		try {
 			parent::beforeUnbind($path);
 		} catch (SameOrganizerForAllComponentsException $e) {
@@ -261,7 +277,7 @@ class Plugin extends \Sabre\CalDAV\Schedule\Plugin {
 		$principalUri = $aclPlugin->getPrincipalByUri($iTipMessage->recipient);
 		$calendarUserType = $this->getCalendarUserTypeForPrincipal($principalUri);
 		if (strcasecmp($calendarUserType, 'ROOM') !== 0 && strcasecmp($calendarUserType, 'RESOURCE') !== 0) {
-			$this->logger->debug('Calendar user type is room or resource, not processing further');
+			$this->logger->debug('Calendar user type is neither room nor resource, not processing further');
 			return;
 		}
 
@@ -372,8 +388,8 @@ EOF;
 					return null;
 				}
 
-				$isResourceOrRoom = str_starts_with($principalUrl, 'principals/calendar-resources') ||
-					str_starts_with($principalUrl, 'principals/calendar-rooms');
+				$isResourceOrRoom = str_starts_with($principalUrl, 'principals/calendar-resources')
+					|| str_starts_with($principalUrl, 'principals/calendar-rooms');
 
 				if (str_starts_with($principalUrl, 'principals/users')) {
 					[, $userId] = split($principalUrl);
@@ -430,12 +446,20 @@ EOF;
 						} else {
 							// Otherwise if we have really nothing, create a new calendar
 							if ($currentCalendarDeleted) {
-								// If the calendar exists but is deleted, we need to purge it first
-								// This may cause some issues in a non synchronous database setup
+								// If the calendar exists but is in the trash bin, we try to rename its uri
+								// so that we can create the new one and still restore the previous one
+								// otherwise we just purge the calendar by removing it before recreating it
 								$calendar = $this->getCalendar($calendarHome, $uri);
 								if ($calendar instanceof Calendar) {
-									$calendar->disableTrashbin();
-									$calendar->delete();
+									$backend = $calendarHome->getCalDAVBackend();
+									if ($backend instanceof CalDavBackend) {
+										// If the CalDAV backend supports moving calendars
+										$this->moveCalendar($backend, $principalUrl, $uri, $uri . '-back-' . time());
+									} else {
+										// Otherwise just purge the calendar
+										$calendar->disableTrashbin();
+										$calendar->delete();
+									}
 								}
 							}
 							$this->createCalendar($calendarHome, $principalUrl, $uri, $displayName);
@@ -572,7 +596,7 @@ EOF;
 		$homePath = $result[0][200]['{' . self::NS_CALDAV . '}calendar-home-set']->getHref();
 		/** @var Calendar $node */
 		foreach ($this->server->tree->getNodeForPath($homePath)->getChildren() as $node) {
-			
+
 			if (!$node instanceof ICalendar) {
 				continue;
 			}
@@ -702,6 +726,10 @@ EOF;
 		$calendarHome->getCalDAVBackend()->createCalendar($principalUri, $uri, [
 			'{DAV:}displayname' => $displayName,
 		]);
+	}
+
+	private function moveCalendar(CalDavBackend $calDavBackend, string $principalUri, string $oldUri, string $newUri): void {
+		$calDavBackend->moveCalendar($oldUri, $principalUri, $principalUri, $newUri);
 	}
 
 	/**

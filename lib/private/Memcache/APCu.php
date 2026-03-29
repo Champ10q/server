@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -8,6 +9,7 @@ namespace OC\Memcache;
 
 use bantu\IniGetWrapper\IniGetWrapper;
 use OCP\IMemcache;
+use OCP\Server;
 
 class APCu extends Cache implements IMemcache {
 	use CASTrait {
@@ -100,7 +102,7 @@ class APCu extends Cache implements IMemcache {
 	 */
 	public function cas($key, $old, $new) {
 		// apc only does cas for ints
-		if (is_int($old) and is_int($new)) {
+		if (is_int($old) && is_int($new)) {
 			return apcu_cas($this->getPrefix() . $key, $old, $new);
 		} else {
 			return $this->casEmulated($key, $old, $new);
@@ -110,9 +112,9 @@ class APCu extends Cache implements IMemcache {
 	public static function isAvailable(): bool {
 		if (!extension_loaded('apcu')) {
 			return false;
-		} elseif (!\OC::$server->get(IniGetWrapper::class)->getBool('apc.enabled')) {
+		} elseif (!Server::get(IniGetWrapper::class)->getBool('apc.enabled')) {
 			return false;
-		} elseif (!\OC::$server->get(IniGetWrapper::class)->getBool('apc.enable_cli') && \OC::$CLI) {
+		} elseif (!Server::get(IniGetWrapper::class)->getBool('apc.enable_cli') && \OC::$CLI) {
 			return false;
 		} elseif (version_compare(phpversion('apcu') ?: '0.0.0', '5.1.0') === -1) {
 			return false;

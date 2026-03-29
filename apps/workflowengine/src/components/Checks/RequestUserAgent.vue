@@ -4,7 +4,8 @@
 -->
 <template>
 	<div>
-		<NcSelect :value="currentValue"
+		<NcSelect
+			v-model="currentValue"
 			:placeholder="t('workflowengine', 'Select a user agent')"
 			label="label"
 			:options="options"
@@ -23,16 +24,17 @@
 				</span>
 			</template>
 		</NcSelect>
-		<input v-if="!isPredefined"
+		<input
+			v-if="!isPredefined"
+			v-model="newValue"
 			type="text"
-			:value="currentValue.id"
 			@input="updateCustom">
 	</div>
 </template>
 
 <script>
-import NcEllipsisedOption from '@nextcloud/vue/dist/Components/NcEllipsisedOption.js'
-import NcSelect from '@nextcloud/vue/dist/Components/NcSelect.js'
+import NcEllipsisedOption from '@nextcloud/vue/components/NcEllipsisedOption'
+import NcSelect from '@nextcloud/vue/components/NcSelect'
 import valueMixin from '../../mixins/valueMixin.js'
 
 export default {
@@ -41,9 +43,19 @@ export default {
 		NcEllipsisedOption,
 		NcSelect,
 	},
+
 	mixins: [
 		valueMixin,
 	],
+
+	props: {
+		modelValue: {
+			type: String,
+			default: '',
+		},
+	},
+
+	emits: ['update:model-value'],
 	data() {
 		return {
 			newValue: '',
@@ -55,17 +67,21 @@ export default {
 			],
 		}
 	},
+
 	computed: {
 		options() {
 			return [...this.predefinedTypes, this.customValue]
 		},
+
 		matchingPredefined() {
 			return this.predefinedTypes
 				.find((type) => this.newValue === type.id)
 		},
+
 		isPredefined() {
 			return !!this.matchingPredefined
 		},
+
 		customValue() {
 			return {
 				icon: 'icon-settings-dark',
@@ -73,37 +89,48 @@ export default {
 				id: '',
 			}
 		},
-		currentValue() {
-			if (this.matchingPredefined) {
-				return this.matchingPredefined
-			}
-			return {
-				icon: 'icon-settings-dark',
-				label: t('workflowengine', 'Custom user agent'),
-				id: this.newValue,
-			}
+
+		currentValue: {
+			get() {
+				if (this.matchingPredefined) {
+					return this.matchingPredefined
+				}
+				return {
+					icon: 'icon-settings-dark',
+					label: t('workflowengine', 'Custom user agent'),
+					id: this.newValue,
+				}
+			},
+
+			set(value) {
+				this.newValue = value
+			},
 		},
 	},
+
 	methods: {
 		validateRegex(string) {
 			const regexRegex = /^\/(.*)\/([gui]{0,3})$/
 			const result = regexRegex.exec(string)
 			return result !== null
 		},
+
 		setValue(value) {
 			// TODO: check if value requires a regex and set the check operator according to that
 			if (value !== null) {
 				this.newValue = value.id
-				this.$emit('input', this.newValue)
+				this.$emit('update:model-value', this.newValue)
 			}
 		},
-		updateCustom(event) {
-			this.newValue = event.target.value
-			this.$emit('input', this.newValue)
+
+		updateCustom() {
+			this.newValue = this.currentValue.id
+			this.$emit('update:model-value', this.newValue)
 		},
 	},
 }
 </script>
+
 <style scoped>
 	.v-select,
 	input[type='text'] {

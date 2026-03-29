@@ -7,31 +7,43 @@
  */
 namespace OC\BackgroundJob;
 
-use OCP\AppFramework\QueryException;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\AutoloadNotAllowedException;
 use OCP\BackgroundJob\IJob;
 use OCP\BackgroundJob\IJobList;
 use OCP\BackgroundJob\IParallelAwareJob;
+use OCP\BackgroundJob\TimedJob;
 use OCP\DB\Exception;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IConfig;
 use OCP\IDBConnection;
+use OCP\Server;
+use OCP\Snowflake\ISnowflakeGenerator;
+use Override;
+use Psr\Container\ContainerExceptionInterface;
 use Psr\Log\LoggerInterface;
 use function get_class;
 use function json_encode;
+use function min;
 use function strlen;
 
 class JobList implements IJobList {
+	public const MAX_ARGUMENT_JSON_LENGTH = 32000;
+
+	/** @var array<string, string> */
+	protected array $alreadyVisitedParallelBlocked = [];
+
 	public function __construct(
-		protected IDBConnection $connection,
-		protected IConfig $config,
-		protected ITimeFactory $timeFactory,
-		protected LoggerInterface $logger,
+		protected readonly IDBConnection $connection,
+		protected readonly IConfig $config,
+		protected readonly ITimeFactory $timeFactory,
+		protected readonly LoggerInterface $logger,
+		protected readonly ISnowflakeGenerator $snowflakeGenerator,
 	) {
 	}
 
-	public function add($job, $argument = null, ?int $firstCheck = null): void {
+	#[Override]
+	public function add(IJob|string $job, mixed $argument = null, ?int $firstCheck = null): void {
 		if ($firstCheck === null) {
 			$firstCheck = $this->timeFactory->getTime();
 		}
@@ -39,14 +51,15 @@ class JobList implements IJobList {
 		$class = ($job instanceof IJob) ? get_class($job) : $job;
 
 		$argumentJson = json_encode($argument);
-		if (strlen($argumentJson) > 4000) {
-			throw new \InvalidArgumentException('Background job arguments can\'t exceed 4000 characters (json encoded)');
+		if (strlen($argumentJson) > self::MAX_ARGUMENT_JSON_LENGTH) {
+			throw new \InvalidArgumentException('Background job arguments can\'t exceed ' . self::MAX_ARGUMENT_JSON_LENGTH . ' characters (json encoded)');
 		}
 
 		$query = $this->connection->getQueryBuilder();
 		if (!$this->has($job, $argument)) {
 			$query->insert('jobs')
 				->values([
+					'id' => $query->createNamedParameter($this->snowflakeGenerator->nextId()),
 					'class' => $query->createNamedParameter($class),
 					'argument' => $query->createNamedParameter($argumentJson),
 					'argument_hash' => $query->createNamedParameter(hash('sha256', $argumentJson)),
@@ -64,15 +77,12 @@ class JobList implements IJobList {
 		$query->executeStatement();
 	}
 
-	public function scheduleAfter(string $job, int $runAfter, $argument = null): void {
+	public function scheduleAfter(string $job, int $runAfter, mixed $argument = null): void {
 		$this->add($job, $argument, $runAfter);
 	}
 
-	/**
-	 * @param IJob|string $job
-	 * @param mixed $argument
-	 */
-	public function remove($job, $argument = null): void {
+	#[Override]
+	public function remove(IJob|string $job, mixed $argument = null): void {
 		$class = ($job instanceof IJob) ? get_class($job) : $job;
 
 		$query = $this->connection->getQueryBuilder();
@@ -100,20 +110,16 @@ class JobList implements IJobList {
 		}
 	}
 
-	public function removeById(int $id): void {
+	#[Override]
+	public function removeById(string $id): void {
 		$query = $this->connection->getQueryBuilder();
 		$query->delete('jobs')
 			->where($query->expr()->eq('id', $query->createNamedParameter($id, IQueryBuilder::PARAM_INT)));
 		$query->executeStatement();
 	}
 
-	/**
-	 * check if a job is in the list
-	 *
-	 * @param IJob|class-string<IJob> $job
-	 * @param mixed $argument
-	 */
-	public function has($job, $argument): bool {
+	#[Override]
+	public function has(IJob|string $job, mixed $argument): bool {
 		$class = ($job instanceof IJob) ? get_class($job) : $job;
 		$argument = json_encode($argument);
 
@@ -131,18 +137,16 @@ class JobList implements IJobList {
 		return (bool)$row;
 	}
 
-	public function getJobs($job, ?int $limit, int $offset): array {
+	#[Override]
+	public function getJobs(IJob|string|null $job, ?int $limit, int $offset): array {
 		$iterable = $this->getJobsIterator($job, $limit, $offset);
 		return (is_array($iterable))
 			? $iterable
 			: iterator_to_array($iterable);
 	}
 
-	/**
-	 * @param IJob|class-string<IJob>|null $job
-	 * @return iterable<IJob> Avoid to store these objects as they may share a Singleton instance. You should instead use these IJobs instances while looping on the iterable.
-	 */
-	public function getJobsIterator($job, ?int $limit, int $offset): iterable {
+	#[Override]
+	public function getJobsIterator(IJob|string|null $job, ?int $limit, int $offset): iterable {
 		$query = $this->connection->getQueryBuilder();
 		$query->select('*')
 			->from('jobs')
@@ -165,9 +169,7 @@ class JobList implements IJobList {
 		$result->closeCursor();
 	}
 
-	/**
-	 * @inheritDoc
-	 */
+	#[Override]
 	public function getNext(bool $onlyTimeSensitive = false, ?array $jobClasses = null): ?IJob {
 		$query = $this->connection->getQueryBuilder();
 		$query->select('*')
@@ -197,6 +199,12 @@ class JobList implements IJobList {
 			$job = $this->buildJob($row);
 
 			if ($job instanceof IParallelAwareJob && !$job->getAllowParallelRuns() && $this->hasReservedJob(get_class($job))) {
+				if (!isset($this->alreadyVisitedParallelBlocked[get_class($job)])) {
+					$this->alreadyVisitedParallelBlocked[get_class($job)] = $job->getId();
+				} elseif ($this->alreadyVisitedParallelBlocked[get_class($job)] === $job->getId()) {
+					$this->logger->info('Skipped through all jobs and revisited a IParallelAwareJob blocked job again, giving up.', ['app' => 'cron']);
+					return null;
+				}
 				$this->logger->info('Skipping ' . get_class($job) . ' job with ID ' . $job->getId() . ' because another job with the same class is already running', ['app' => 'cron']);
 
 				$update = $this->connection->getQueryBuilder();
@@ -206,7 +214,31 @@ class JobList implements IJobList {
 				$update->setParameter('jobid', $row['id']);
 				$update->executeStatement();
 
-				return $this->getNext($onlyTimeSensitive);
+				return $this->getNext($onlyTimeSensitive, $jobClasses);
+			}
+
+			if ($job !== null && isset($this->alreadyVisitedParallelBlocked[get_class($job)])) {
+				unset($this->alreadyVisitedParallelBlocked[get_class($job)]);
+			}
+
+			if ($job instanceof TimedJob) {
+				$now = $this->timeFactory->getTime();
+				$nextPossibleRun = $job->getLastRun() + $job->getInterval();
+				if ($now < $nextPossibleRun) {
+					// This job is not ready for execution yet. Set timestamps to the future to avoid
+					// re-checking with every cron run.
+					// To avoid bugs that lead to jobs never executing again, the future timestamp is
+					// capped at two days.
+					$nextCheck = min($nextPossibleRun, $now + 48 * 3600);
+					$updateTimedJob = $this->connection->getQueryBuilder();
+					$updateTimedJob->update('jobs')
+						->set('last_checked', $updateTimedJob->createNamedParameter($nextCheck, IQueryBuilder::PARAM_INT))
+						->where($updateTimedJob->expr()->eq('id', $updateTimedJob->createParameter('jobid')));
+					$updateTimedJob->setParameter('jobid', $row['id']);
+					$updateTimedJob->executeStatement();
+
+					return $this->getNext($onlyTimeSensitive, $jobClasses);
+				}
 			}
 
 			$update = $this->connection->getQueryBuilder();
@@ -245,10 +277,8 @@ class JobList implements IJobList {
 		}
 	}
 
-	/**
-	 * @return ?IJob The job matching the id. Beware that this object may be a singleton and may be modified by the next call to buildJob.
-	 */
-	public function getById(int $id): ?IJob {
+	#[Override]
+	public function getById(string $id): ?IJob {
 		$row = $this->getDetailsById($id);
 
 		if ($row) {
@@ -258,11 +288,12 @@ class JobList implements IJobList {
 		return null;
 	}
 
-	public function getDetailsById(int $id): ?array {
+	#[Override]
+	public function getDetailsById(string $id): ?array {
 		$query = $this->connection->getQueryBuilder();
 		$query->select('*')
 			->from('jobs')
-			->where($query->expr()->eq('id', $query->createNamedParameter($id, IQueryBuilder::PARAM_INT)));
+			->where($query->expr()->eq('id', $query->createNamedParameter($id)));
 		$result = $query->executeQuery();
 		$row = $result->fetch();
 		$result->closeCursor();
@@ -285,8 +316,8 @@ class JobList implements IJobList {
 			try {
 				// Try to load the job as a service
 				/** @var IJob $job */
-				$job = \OCP\Server::get($row['class']);
-			} catch (QueryException $e) {
+				$job = Server::get($row['class']);
+			} catch (ContainerExceptionInterface $e) {
 				if (class_exists($row['class'])) {
 					$class = $row['class'];
 					$job = new $class();
@@ -302,7 +333,7 @@ class JobList implements IJobList {
 				// This most likely means an invalid job was enqueued. We can ignore it.
 				return null;
 			}
-			$job->setId((int)$row['id']);
+			$job->setId($row['id']);
 			$job->setLastRun((int)$row['last_run']);
 			$job->setArgument(json_decode($row['argument'], true));
 			return $job;
@@ -317,12 +348,10 @@ class JobList implements IJobList {
 	 */
 	public function setLastJob(IJob $job): void {
 		$this->unlockJob($job);
-		$this->config->setAppValue('backgroundjob', 'lastjob', (string)$job->getId());
+		$this->config->setAppValue('backgroundjob', 'lastjob', $job->getId());
 	}
 
-	/**
-	 * Remove the reservation for a job
-	 */
+	#[Override]
 	public function unlockJob(IJob $job): void {
 		$query = $this->connection->getQueryBuilder();
 		$query->update('jobs')
@@ -331,16 +360,14 @@ class JobList implements IJobList {
 		$query->executeStatement();
 	}
 
-	/**
-	 * set the lastRun of $job to now
-	 */
+	#[Override]
 	public function setLastRun(IJob $job): void {
 		$query = $this->connection->getQueryBuilder();
 		$query->update('jobs')
 			->set('last_run', $query->createNamedParameter(time(), IQueryBuilder::PARAM_INT))
-			->where($query->expr()->eq('id', $query->createNamedParameter($job->getId(), IQueryBuilder::PARAM_INT)));
+			->where($query->expr()->eq('id', $query->createNamedParameter($job->getId())));
 
-		if ($job instanceof \OCP\BackgroundJob\TimedJob
+		if ($job instanceof TimedJob
 			&& !$job->isTimeSensitive()) {
 			$query->set('time_sensitive', $query->createNamedParameter(IJob::TIME_INSENSITIVE));
 		}
@@ -348,9 +375,7 @@ class JobList implements IJobList {
 		$query->executeStatement();
 	}
 
-	/**
-	 * @param int $timeTaken
-	 */
+	#[Override]
 	public function setExecutionTime(IJob $job, $timeTaken): void {
 		$query = $this->connection->getQueryBuilder();
 		$query->update('jobs')
@@ -360,11 +385,7 @@ class JobList implements IJobList {
 		$query->executeStatement();
 	}
 
-	/**
-	 * Reset the $job so it executes on the next trigger
-	 *
-	 * @since 23.0.0
-	 */
+	#[Override]
 	public function resetBackgroundJob(IJob $job): void {
 		$query = $this->connection->getQueryBuilder();
 		$query->update('jobs')
@@ -374,6 +395,7 @@ class JobList implements IJobList {
 		$query->executeStatement();
 	}
 
+	#[Override]
 	public function hasReservedJob(?string $className = null): bool {
 		$query = $this->connection->getQueryBuilder();
 		$query->select('*')
@@ -396,6 +418,7 @@ class JobList implements IJobList {
 		}
 	}
 
+	#[Override]
 	public function countByClass(): array {
 		$query = $this->connection->getQueryBuilder();
 		$query->select('class')
@@ -410,7 +433,7 @@ class JobList implements IJobList {
 
 		while (($row = $result->fetch()) !== false) {
 			/**
-			 * @var array{count:int, class:class-string} $row
+			 * @var array{count:int, class:class-string<IJob>} $row
 			 */
 			$jobs[] = $row;
 		}

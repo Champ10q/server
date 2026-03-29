@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -7,9 +8,12 @@ namespace OCA\Files_Sharing\Controller;
 
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
+use OCP\AppFramework\Http\Attribute\NoSameSiteCookieRequired;
+use OCP\AppFramework\Http\Attribute\OpenAPI;
 use OCP\AppFramework\Http\Attribute\PublicPage;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\Http\FileDisplayResponse;
+use OCP\AppFramework\Http\RedirectResponse;
 use OCP\AppFramework\PublicShareController;
 use OCP\Constants;
 use OCP\Files\Folder;
@@ -17,6 +21,7 @@ use OCP\Files\NotFoundException;
 use OCP\IPreview;
 use OCP\IRequest;
 use OCP\ISession;
+use OCP\Preview\IMimeIconProvider;
 use OCP\Share\Exceptions\ShareNotFound;
 use OCP\Share\IManager as ShareManager;
 use OCP\Share\IShare;
@@ -32,6 +37,7 @@ class PublicPreviewController extends PublicShareController {
 		private ShareManager $shareManager,
 		ISession $session,
 		private IPreview $previewManager,
+		private IMimeIconProvider $mimeIconProvider,
 	) {
 		parent::__construct($appName, $request, $session);
 	}
@@ -62,21 +68,25 @@ class PublicPreviewController extends PublicShareController {
 	 * @param int $x Width of the preview
 	 * @param int $y Height of the preview
 	 * @param bool $a Whether to not crop the preview
-	 * @return FileDisplayResponse<Http::STATUS_OK, array{Content-Type: string}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_FORBIDDEN|Http::STATUS_NOT_FOUND, list<empty>, array{}>
+	 * @param bool $mimeFallback Whether to fallback to the mime icon if no preview is available
+	 * @return FileDisplayResponse<Http::STATUS_OK, array{Content-Type: string}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_FORBIDDEN|Http::STATUS_NOT_FOUND, list<empty>, array{}>|RedirectResponse<Http::STATUS_SEE_OTHER, array{}>
 	 *
 	 * 200: Preview returned
+	 * 303: Redirect to the mime icon url if mimeFallback is true
 	 * 400: Getting preview is not possible
 	 * 403: Getting preview is not allowed
 	 * 404: Share or preview not found
 	 */
 	#[PublicPage]
 	#[NoCSRFRequired]
+	#[OpenAPI(scope: OpenAPI::SCOPE_DEFAULT)]
 	public function getPreview(
 		string $token,
 		string $file = '',
 		int $x = 32,
 		int $y = 32,
 		$a = false,
+		bool $mimeFallback = false,
 	) {
 		$cacheForSeconds = 60 * 60 * 24; // 1 day
 
@@ -94,12 +104,12 @@ class PublicPreviewController extends PublicShareController {
 			return new DataResponse([], Http::STATUS_FORBIDDEN);
 		}
 
-		$attributes = $share->getAttributes();
 		// Only explicitly set to false will forbid the download!
-		$downloadForbidden = $attributes?->getAttribute('permissions', 'download') === false;
+		$downloadForbidden = !$share->canSeeContent();
+
 		// Is this header is set it means our UI is doing a preview for no-download shares
 		// we check a header so we at least prevent people from using the link directly (obfuscation)
-		$isPublicPreview = $this->request->getHeader('X-NC-Preview') === 'true';
+		$isPublicPreview = $this->request->getHeader('x-nc-preview') === 'true';
 
 		if ($isPublicPreview && $downloadForbidden) {
 			// Only cache for 15 minutes on public preview requests to quickly remove from cache
@@ -122,6 +132,12 @@ class PublicPreviewController extends PublicShareController {
 			$response->cacheFor($cacheForSeconds);
 			return $response;
 		} catch (NotFoundException $e) {
+			// If we have no preview enabled, we can redirect to the mime icon if any
+			if ($mimeFallback) {
+				if ($url = $this->mimeIconProvider->getMimeIconUrl($file->getMimeType())) {
+					return new RedirectResponse($url);
+				}
+			}
 			return new DataResponse([], Http::STATUS_NOT_FOUND);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse([], Http::STATUS_BAD_REQUEST);
@@ -129,8 +145,6 @@ class PublicPreviewController extends PublicShareController {
 	}
 
 	/**
-	 * @NoSameSiteCookieRequired
-	 *
 	 * Get a direct link preview for a shared file
 	 *
 	 * @param string $token Token of the share
@@ -143,6 +157,8 @@ class PublicPreviewController extends PublicShareController {
 	 */
 	#[PublicPage]
 	#[NoCSRFRequired]
+	#[OpenAPI(scope: OpenAPI::SCOPE_DEFAULT)]
+	#[NoSameSiteCookieRequired]
 	public function directLink(string $token) {
 		// No token no image
 		if ($token === '') {
@@ -166,8 +182,7 @@ class PublicPreviewController extends PublicShareController {
 			return new DataResponse([], Http::STATUS_FORBIDDEN);
 		}
 
-		$attributes = $share->getAttributes();
-		if ($attributes !== null && $attributes->getAttribute('permissions', 'download') === false) {
+		if (!$share->canSeeContent()) {
 			return new DataResponse([], Http::STATUS_FORBIDDEN);
 		}
 

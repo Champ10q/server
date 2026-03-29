@@ -69,14 +69,14 @@ class ScanFiles extends TimedJob {
 			$query->select('m.user_id')
 				->from('filecache', 'f')
 				->leftJoin('f', 'mounts', 'm', $query->expr()->eq('m.storage_id', 'f.storage'))
-				->where($query->expr()->lt('f.size', $query->createNamedParameter(0, IQueryBuilder::PARAM_INT)))
+				->where($query->expr()->eq('f.size', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
 				->andWhere($query->expr()->gt('f.parent', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
 				->setMaxResults(10)
 				->groupBy('f.storage')
 				->runAcrossAllShards();
 
 			$result = $query->executeQuery();
-			while ($res = $result->fetch()) {
+			while ($res = $result->fetchAssociative()) {
 				if ($res['user_id']) {
 					return $res['user_id'];
 				}
@@ -90,7 +90,7 @@ class ScanFiles extends TimedJob {
 			$query->select('m.user_id')
 				->from('filecache', 'f')
 				->leftJoin('f', 'mounts', 'm', $query->expr()->eq('m.storage_id', 'f.storage'))
-				->where($query->expr()->lt('f.size', $query->createNamedParameter(0, IQueryBuilder::PARAM_INT)))
+				->where($query->expr()->eq('f.size', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
 				->andWhere($query->expr()->gt('f.parent', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
 				->andWhere($query->expr()->in('f.storage', $query->createNamedParameter($storages, IQueryBuilder::PARAM_INT_ARRAY)))
 				->setMaxResults(1)
@@ -101,7 +101,7 @@ class ScanFiles extends TimedJob {
 			$query->select('m.user_id')
 				->from('filecache', 'f')
 				->innerJoin('f', 'mounts', 'm', $query->expr()->eq('m.storage_id', 'f.storage'))
-				->where($query->expr()->lt('f.size', $query->createNamedParameter(0, IQueryBuilder::PARAM_INT)))
+				->where($query->expr()->eq('f.size', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
 				->andWhere($query->expr()->gt('f.parent', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
 				->setMaxResults(1)
 				->runAcrossAllShards();
@@ -114,7 +114,7 @@ class ScanFiles extends TimedJob {
 		$query = $this->connection->getQueryBuilder();
 		$query->selectDistinct('storage_id')
 			->from('mounts');
-		return $query->executeQuery()->fetchAll(\PDO::FETCH_COLUMN);
+		return $query->executeQuery()->fetchFirstColumn();
 	}
 
 	/**

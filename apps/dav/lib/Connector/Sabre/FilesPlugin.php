@@ -9,11 +9,15 @@ namespace OCA\DAV\Connector\Sabre;
 
 use OC\AppFramework\Http\Request;
 use OC\FilesMetadata\Model\FilesMetadata;
+use OC\User\NoUserException;
 use OCA\DAV\Connector\Sabre\Exception\InvalidPath;
+use OCA\Files_Sharing\External\Mount as SharingExternalMount;
+use OCP\Accounts\IAccountManager;
 use OCP\Constants;
 use OCP\Files\ForbiddenException;
 use OCP\Files\IFilenameValidator;
 use OCP\Files\InvalidPathException;
+use OCP\Files\Storage\ISharedStorage;
 use OCP\Files\StorageNotAvailableException;
 use OCP\FilesMetadata\Exceptions\FilesMetadataException;
 use OCP\FilesMetadata\Exceptions\FilesMetadataNotFoundException;
@@ -36,6 +40,7 @@ use Sabre\HTTP\RequestInterface;
 use Sabre\HTTP\ResponseInterface;
 
 class FilesPlugin extends ServerPlugin {
+
 	// namespace
 	public const NS_OWNCLOUD = 'http://owncloud.org/ns';
 	public const NS_NEXTCLOUD = 'http://nextcloud.org/ns';
@@ -46,6 +51,7 @@ class FilesPlugin extends ServerPlugin {
 	public const OCM_SHARE_PERMISSIONS_PROPERTYNAME = '{http://open-cloud-mesh.org/ns}share-permissions';
 	public const SHARE_ATTRIBUTES_PROPERTYNAME = '{http://nextcloud.org/ns}share-attributes';
 	public const DOWNLOADURL_PROPERTYNAME = '{http://owncloud.org/ns}downloadURL';
+	public const DOWNLOADURL_EXPIRATION_PROPERTYNAME = '{http://nextcloud.org/ns}download-url-expiration';
 	public const SIZE_PROPERTYNAME = '{http://owncloud.org/ns}size';
 	public const GETETAG_PROPERTYNAME = '{DAV:}getetag';
 	public const LASTMODIFIED_PROPERTYNAME = '{DAV:}lastmodified';
@@ -62,7 +68,9 @@ class FilesPlugin extends ServerPlugin {
 	public const METADATA_ETAG_PROPERTYNAME = '{http://nextcloud.org/ns}metadata_etag';
 	public const UPLOAD_TIME_PROPERTYNAME = '{http://nextcloud.org/ns}upload_time';
 	public const CREATION_TIME_PROPERTYNAME = '{http://nextcloud.org/ns}creation_time';
+	public const LAST_ACTIVITY_PROPERTYNAME = '{http://nextcloud.org/ns}last_activity';
 	public const SHARE_NOTE = '{http://nextcloud.org/ns}note';
+	public const SHARE_HIDE_DOWNLOAD_PROPERTYNAME = '{http://nextcloud.org/ns}hide-download';
 	public const SUBFOLDER_COUNT_PROPERTYNAME = '{http://nextcloud.org/ns}contained-folder-count';
 	public const SUBFILE_COUNT_PROPERTYNAME = '{http://nextcloud.org/ns}contained-file-count';
 	public const FILE_METADATA_PREFIX = '{http://nextcloud.org/ns}metadata-';
@@ -88,6 +96,7 @@ class FilesPlugin extends ServerPlugin {
 		private IPreview $previewManager,
 		private IUserSession $userSession,
 		private IFilenameValidator $validator,
+		private IAccountManager $accountManager,
 		private bool $isPublic = false,
 		private bool $downloadAttachment = true,
 	) {
@@ -114,6 +123,7 @@ class FilesPlugin extends ServerPlugin {
 		$server->protectedProperties[] = self::SHARE_ATTRIBUTES_PROPERTYNAME;
 		$server->protectedProperties[] = self::SIZE_PROPERTYNAME;
 		$server->protectedProperties[] = self::DOWNLOADURL_PROPERTYNAME;
+		$server->protectedProperties[] = self::DOWNLOADURL_EXPIRATION_PROPERTYNAME;
 		$server->protectedProperties[] = self::OWNER_ID_PROPERTYNAME;
 		$server->protectedProperties[] = self::OWNER_DISPLAY_NAME_PROPERTYNAME;
 		$server->protectedProperties[] = self::CHECKSUMS_PROPERTYNAME;
@@ -158,11 +168,6 @@ class FilesPlugin extends ServerPlugin {
 			return;
 		}
 
-		// Ensure source exists
-		$sourceNodeFileInfo = $sourceNode->getFileInfo();
-		if ($sourceNodeFileInfo === null) {
-			throw new NotFound($source . ' does not exist');
-		}
 		// Ensure the target name is valid
 		try {
 			[$targetPath, $targetName] = \Sabre\Uri\split($target);
@@ -198,10 +203,24 @@ class FilesPlugin extends ServerPlugin {
 		// First check copyable (move only needs additional delete permission)
 		$this->checkCopy($source, $target);
 
-		// The source needs to be deletable for moving
-		$sourceNodeFileInfo = $sourceNode->getFileInfo();
-		if (!$sourceNodeFileInfo->isDeletable()) {
-			throw new Forbidden($source . ' cannot be deleted');
+		[$sourceDir] = \Sabre\Uri\split($source);
+		[$destinationDir, ] = \Sabre\Uri\split($target);
+
+		if ($sourceDir === $destinationDir) {
+			if (!$sourceNode->canRename()) {
+				throw new Forbidden($source . ' cannot be renamed');
+			}
+		} else {
+			// The source needs to be deletable for moving
+			$sourceNodeFileInfo = $sourceNode->getFileInfo();
+			if (!$sourceNodeFileInfo->isDeletable()) {
+				throw new Forbidden($source . ' cannot be deleted');
+			}
+		}
+
+		// The source is not allowed to be the parent of the target
+		if (str_starts_with($source, $target . '/')) {
+			throw new Forbidden($source . ' cannot be moved to it\'s parent');
 		}
 	}
 
@@ -246,8 +265,8 @@ class FilesPlugin extends ServerPlugin {
 
 		// adds a 'Content-Disposition: attachment' header in case no disposition
 		// header has been set before
-		if ($this->downloadAttachment &&
-			$response->getHeader('Content-Disposition') === null) {
+		if ($this->downloadAttachment
+			&& $response->getHeader('Content-Disposition') === null) {
 			$filename = $node->getName();
 			if ($this->request->isUserAgent(
 				[
@@ -303,12 +322,7 @@ class FilesPlugin extends ServerPlugin {
 			});
 
 			$propFind->handle(self::PERMISSIONS_PROPERTYNAME, function () use ($node) {
-				$perms = $node->getDavPermissions();
-				if ($this->isPublic) {
-					// remove mount information
-					$perms = str_replace(['S', 'M'], '', $perms);
-				}
-				return $perms;
+				return $this->isPublic ? $node->getPublicDavPermissions() : $node->getDavPermissions();
 			});
 
 			$propFind->handle(self::SHARE_PERMISSIONS_PROPERTYNAME, function () use ($node, $httpRequest) {
@@ -353,9 +367,32 @@ class FilesPlugin extends ServerPlugin {
 				$owner = $node->getOwner();
 				if (!$owner) {
 					return null;
-				} else {
+				}
+
+				// Get current user to see if we're in a public share or not
+				$user = $this->userSession->getUser();
+
+				// If the user is logged in, we can return the display name
+				if ($user !== null) {
 					return $owner->getDisplayName();
 				}
+
+				// Check if the user published their display name
+				try {
+					$ownerAccount = $this->accountManager->getAccount($owner);
+				} catch (NoUserException) {
+					// do not lock process if owner is not local
+					return null;
+				}
+
+				$ownerNameProperty = $ownerAccount->getProperty(IAccountManager::PROPERTY_DISPLAYNAME);
+
+				// Since we are not logged in, we need to have at least the published scope
+				if ($ownerNameProperty->getScope() === IAccountManager::SCOPE_PUBLISHED) {
+					return $owner->getDisplayName();
+				}
+
+				return null;
 			});
 
 			$propFind->handle(self::HAS_PREVIEW_PROPERTYNAME, function () use ($node) {
@@ -385,6 +422,19 @@ class FilesPlugin extends ServerPlugin {
 				);
 			});
 
+			$propFind->handle(self::SHARE_HIDE_DOWNLOAD_PROPERTYNAME, function () use ($node) {
+				$storage = $node->getNode()->getStorage();
+				if ($storage->instanceOfStorage(ISharedStorage::class)) {
+					/** @var ISharedStorage $storage */
+					return match($storage->getShare()->getHideDownload()) {
+						true => 'true',
+						false => 'false',
+					};
+				} else {
+					return null;
+				}
+			});
+
 			$propFind->handle(self::DATA_FINGERPRINT_PROPERTYNAME, function () {
 				return $this->config->getSystemValue('data-fingerprint', '');
 			});
@@ -395,6 +445,10 @@ class FilesPlugin extends ServerPlugin {
 			});
 			$propFind->handle(self::CREATION_TIME_PROPERTYNAME, function () use ($node) {
 				return $node->getFileInfo()->getCreationTime();
+			});
+
+			$propFind->handle(self::LAST_ACTIVITY_PROPERTYNAME, function () use ($node) {
+				return $node->getFileInfo()->getLastActivity();
 			});
 
 			foreach ($node->getFileInfo()->getMetadata() as $metadataKey => $metadataValue) {
@@ -419,24 +473,35 @@ class FilesPlugin extends ServerPlugin {
 
 			$propFind->handle(self::IS_FEDERATED_PROPERTYNAME, function () use ($node) {
 				return $node->getFileInfo()->getMountPoint()
-					instanceof \OCA\Files_Sharing\External\Mount;
+					instanceof SharingExternalMount;
 			});
 		}
 
 		if ($node instanceof File) {
-			$propFind->handle(self::DOWNLOADURL_PROPERTYNAME, function () use ($node) {
+			$requestProperties = $propFind->getRequestedProperties();
+
+			if (in_array(self::DOWNLOADURL_PROPERTYNAME, $requestProperties, true)
+				|| in_array(self::DOWNLOADURL_EXPIRATION_PROPERTYNAME, $requestProperties, true)) {
 				try {
 					$directDownloadUrl = $node->getDirectDownload();
-					if (isset($directDownloadUrl['url'])) {
+				} catch (StorageNotAvailableException|ForbiddenException) {
+					$directDownloadUrl = null;
+				}
+
+				$propFind->handle(self::DOWNLOADURL_PROPERTYNAME, function () use ($node, $directDownloadUrl) {
+					if ($directDownloadUrl && isset($directDownloadUrl['url'])) {
 						return $directDownloadUrl['url'];
 					}
-				} catch (StorageNotAvailableException $e) {
 					return false;
-				} catch (ForbiddenException $e) {
+				});
+
+				$propFind->handle(self::DOWNLOADURL_EXPIRATION_PROPERTYNAME, function () use ($node, $directDownloadUrl) {
+					if ($directDownloadUrl && isset($directDownloadUrl['expiration'])) {
+						return $directDownloadUrl['expiration'];
+					}
 					return false;
-				}
-				return false;
-			});
+				});
+			}
 
 			$propFind->handle(self::CHECKSUMS_PROPERTYNAME, function () use ($node) {
 				$checksum = $node->getChecksum();
@@ -494,8 +559,8 @@ class FilesPlugin extends ServerPlugin {
 			$ocmPermissions[] = 'read';
 		}
 
-		if (($ncPermissions & Constants::PERMISSION_CREATE) ||
-			($ncPermissions & Constants::PERMISSION_UPDATE)) {
+		if (($ncPermissions & Constants::PERMISSION_CREATE)
+			|| ($ncPermissions & Constants::PERMISSION_UPDATE)) {
 			$ocmPermissions[] = 'write';
 		}
 
@@ -593,6 +658,12 @@ class FilesPlugin extends ServerPlugin {
 						throw new FilesMetadataException('you do not have enough rights to update \'' . $metadataKey . '\' on this node');
 					}
 
+					if ($value === null) {
+						$metadata->unset($metadataKey);
+						$filesMetadataManager->saveMetadata($metadata);
+						return true;
+					}
+
 					// If the metadata is unknown, it defaults to string.
 					try {
 						$type = $knownMetadata->getType($metadataKey);
@@ -640,7 +711,7 @@ class FilesPlugin extends ServerPlugin {
 	private function initFilesMetadataManager(): IFilesMetadataManager {
 		/** @var IFilesMetadataManager $manager */
 		$manager = \OCP\Server::get(IFilesMetadataManager::class);
-		$manager->initMetadata('files-live-photo', IMetadataValueWrapper::TYPE_STRING, false, IMetadataValueWrapper::EDIT_REQ_OWNERSHIP);
+		$manager->initMetadata('files-live-photo', IMetadataValueWrapper::TYPE_STRING, false, IMetadataValueWrapper::EDIT_REQ_WRITE_PERMISSION);
 
 		return $manager;
 	}
@@ -666,8 +737,6 @@ class FilesPlugin extends ServerPlugin {
 		return IMetadataValueWrapper::EDIT_REQ_READ_PERMISSION;
 	}
 
-
-
 	/**
 	 * @param string $filePath
 	 * @param ?\Sabre\DAV\INode $node
@@ -676,15 +745,15 @@ class FilesPlugin extends ServerPlugin {
 	 */
 	public function sendFileIdHeader($filePath, ?\Sabre\DAV\INode $node = null) {
 		// we get the node for the given $filePath here because in case of afterCreateFile $node is the parent folder
-		if (!$this->server->tree->nodeExists($filePath)) {
-			return;
-		}
-		$node = $this->server->tree->getNodeForPath($filePath);
-		if ($node instanceof Node) {
-			$fileId = $node->getFileId();
-			if (!is_null($fileId)) {
-				$this->server->httpResponse->setHeader('OC-FileId', $fileId);
+		try {
+			$node = $this->server->tree->getNodeForPath($filePath);
+			if ($node instanceof Node) {
+				$fileId = $node->getFileId();
+				if (!is_null($fileId)) {
+					$this->server->httpResponse->setHeader('OC-FileId', $fileId);
+				}
 			}
+		} catch (NotFound) {
 		}
 	}
 }

@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -52,7 +53,7 @@ class Application extends App implements IBootstrap {
 			);
 		});
 		$context->registerService(ProvisioningApiMiddleware::class, function (ContainerInterface $c) {
-			$user = $c->get(IUserManager::class)->get($c->get('UserId'));
+			$user = $c->get(IUserManager::class)->get($c->get('userId'));
 			$isAdmin = false;
 			$isSubAdmin = false;
 

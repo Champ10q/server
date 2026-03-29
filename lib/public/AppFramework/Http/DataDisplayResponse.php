@@ -13,9 +13,9 @@ use OCP\AppFramework\Http;
  * Class DataDisplayResponse
  *
  * @since 8.1.0
- * @template S of int
- * @template H of array<string, mixed>
- * @template-extends Response<int, array<string, mixed>>
+ * @template-covariant S of Http::STATUS_*
+ * @template-covariant H of array<string, mixed>
+ * @template-extends Response<Http::STATUS_*, array<string, mixed>>
  */
 class DataDisplayResponse extends Response {
 	/**

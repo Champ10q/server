@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -7,6 +8,7 @@
 namespace OC\Memcache;
 
 use OCP\IMemcacheTTL;
+use OCP\Server;
 
 class Redis extends Cache implements IMemcacheTTL {
 	/** name => [script, sha1] */
@@ -50,7 +52,7 @@ class Redis extends Cache implements IMemcacheTTL {
 	 */
 	public function getCache() {
 		if (is_null(self::$cache)) {
-			self::$cache = \OC::$server->get('RedisFactory')->getInstance();
+			self::$cache = Server::get('RedisFactory')->getInstance();
 		}
 		return self::$cache;
 	}
@@ -195,7 +197,7 @@ class Redis extends Cache implements IMemcacheTTL {
 	}
 
 	public static function isAvailable(): bool {
-		return \OC::$server->get('RedisFactory')->isAvailable();
+		return Server::get('RedisFactory')->isAvailable();
 	}
 
 	protected function evalLua(string $scriptName, array $keys, array $args) {

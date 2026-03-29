@@ -14,7 +14,7 @@
 Turning the feature off removes shared files and folders on the server for all share recipients, and also on the sync clients and mobile apps. More information is available in the Nextcloud Documentation.
 
 	</description>
-	<version>1.23.1</version>
+	<version>1.26.0</version>
 	<licence>agpl</licence>
 	<author>Michael Gapczynski</author>
 	<author>Bjoern Schiessle</author>
@@ -27,7 +27,7 @@ Turning the feature off removes shared files and folders on the server for all s
 	<category>social</category>
 	<bugs>https://github.com/nextcloud/server/issues</bugs>
 	<dependencies>
-		<nextcloud min-version="31" max-version="31"/>
+		<nextcloud min-version="34" max-version="34"/>
 	</dependencies>
 
 	<background-jobs>
@@ -50,6 +50,7 @@ Turning the feature off removes shared files and folders on the server for all s
 		<command>OCA\Files_Sharing\Command\ExiprationNotification</command>
 		<command>OCA\Files_Sharing\Command\DeleteOrphanShares</command>
 		<command>OCA\Files_Sharing\Command\FixShareOwners</command>
+		<command>OCA\Files_Sharing\Command\ListShares</command>
 	</commands>
 
 	<settings>
@@ -86,4 +87,8 @@ Turning the feature off removes shared files and folders on the server for all s
 	<public>
 		<files>public.php</files>
 	</public>
+
+	<openmetrics>
+		<exporter>OCA\Files_Sharing\OpenMetrics\SharesCountMetric</exporter>
+	</openmetrics>
 </info>

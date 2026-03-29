@@ -33,28 +33,25 @@ use OCP\DB\Exception;
  * @psalm-immutable
  */
 class DbalException extends Exception {
-	/** @var \Doctrine\DBAL\Exception */
-	private $original;
-
-	/**
-	 * @param \Doctrine\DBAL\Exception $original
-	 * @param int $code
-	 * @param string $message
-	 */
-	private function __construct(\Doctrine\DBAL\Exception $original, int $code, string $message) {
+	private function __construct(
+		private \Doctrine\DBAL\Exception $original,
+		int $code,
+		string $message,
+		public readonly ?string $query = null,
+	) {
 		parent::__construct(
 			$message,
 			$code,
 			$original
 		);
-		$this->original = $original;
 	}
 
-	public static function wrap(\Doctrine\DBAL\Exception $original, string $message = ''): self {
+	public static function wrap(\Doctrine\DBAL\Exception $original, string $message = '', ?string $query = null): self {
 		return new self(
 			$original,
 			is_int($original->getCode()) ? $original->getCode() : 0,
-			empty($message) ? $original->getMessage() : $message
+			empty($message) ? $original->getMessage() : $message,
+			$query,
 		);
 	}
 

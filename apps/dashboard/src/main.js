@@ -4,16 +4,11 @@
  */
 
 import { getCSPNonce } from '@nextcloud/auth'
-import { translate as t } from '@nextcloud/l10n'
-import VTooltip from '@nextcloud/vue/dist/Directives/Tooltip.js'
+import { t } from '@nextcloud/l10n'
 import Vue from 'vue'
-
 import DashboardApp from './DashboardApp.vue'
 
-// eslint-disable-next-line camelcase
 __webpack_nonce__ = getCSPNonce()
-
-Vue.directive('Tooltip', VTooltip)
 
 Vue.prototype.t = t
 

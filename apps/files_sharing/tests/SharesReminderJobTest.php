@@ -20,6 +20,7 @@ use OCP\IUserManager;
 use OCP\L10N\IFactory;
 use OCP\Mail\IMailer;
 use OCP\Mail\IMessage;
+use OCP\Server;
 use OCP\Share\IManager;
 use OCP\Share\IShare;
 use PHPUnit\Framework\MockObject\MockObject;
@@ -28,10 +29,10 @@ use Psr\Log\LoggerInterface;
 /**
  * Class SharesReminderJobTest
  *
- * @group DB
  *
  * @package OCA\Files_Sharing\Tests
  */
+#[\PHPUnit\Framework\Attributes\Group(name: 'DB')]
 class SharesReminderJobTest extends \Test\TestCase {
 	private SharesReminderJob $job;
 	private IDBConnection $db;
@@ -44,9 +45,9 @@ class SharesReminderJobTest extends \Test\TestCase {
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->db = \OC::$server->get(IDBConnection::class);
-		$this->shareManager = \OC::$server->get(IManager::class);
-		$this->userManager = \OC::$server->get(IUserManager::class);
+		$this->db = Server::get(IDBConnection::class);
+		$this->shareManager = Server::get(IManager::class);
+		$this->userManager = Server::get(IUserManager::class);
 		$this->mailer = $this->createMock(IMailer::class);
 
 		// Clear occasional leftover shares from other tests
@@ -60,26 +61,26 @@ class SharesReminderJobTest extends \Test\TestCase {
 		$user1->setSystemEMailAddress('user1@test.com');
 		$user2->setSystemEMailAddress('user2@test.com');
 
-		\OC::registerShareHooks(\OC::$server->get(SystemConfig::class));
+		\OC::registerShareHooks(Server::get(SystemConfig::class));
 
 		$this->job = new SharesReminderJob(
-			\OC::$server->get(ITimeFactory::class),
+			Server::get(ITimeFactory::class),
 			$this->db,
-			\OC::$server->get(IManager::class),
+			Server::get(IManager::class),
 			$this->userManager,
-			\OC::$server->get(LoggerInterface::class),
-			\OC::$server->get(IURLGenerator::class),
-			\OC::$server->get(IFactory::class),
+			Server::get(LoggerInterface::class),
+			Server::get(IURLGenerator::class),
+			Server::get(IFactory::class),
 			$this->mailer,
-			\OC::$server->get(Defaults::class),
-			\OC::$server->get(IMimeTypeLoader::class),
+			Server::get(Defaults::class),
+			Server::get(IMimeTypeLoader::class),
 		);
 	}
 
 	protected function tearDown(): void {
 		$this->db->executeUpdate('DELETE FROM `*PREFIX*share`');
 
-		$userManager = \OC::$server->get(IUserManager::class);
+		$userManager = Server::get(IUserManager::class);
 		$user1 = $userManager->get($this->user1);
 		if ($user1) {
 			$user1->delete();
@@ -94,16 +95,15 @@ class SharesReminderJobTest extends \Test\TestCase {
 		parent::tearDown();
 	}
 
-	public function dataSharesReminder() {
+	public static function dataSharesReminder() {
 		$someMail = 'test@test.com';
 		$noExpirationDate = null;
 		$today = new \DateTime();
-		// For expiration dates, the time is always automatically set to zero by ShareAPIController
-		$today->setTime(0, 0);
-		$nearFuture = new \DateTime();
-		$nearFuture->setTimestamp($today->getTimestamp() + 86400 * 1);
+		// Expiration dates are set to end of day (23:59:59) by the Share Manager
+		$today->setTime(23, 59, 59);
+		$nearFuture = clone $today;
 		$farFuture = new \DateTime();
-		$farFuture->setTimestamp($today->getTimestamp() + 86400 * 2);
+		$farFuture->setTimestamp($today->getTimestamp() + 86400 * 1);
 		$permissionRead = Constants::PERMISSION_READ;
 		$permissionCreate = $permissionRead | Constants::PERMISSION_CREATE;
 		$permissionUpdate = $permissionRead | Constants::PERMISSION_UPDATE;
@@ -143,7 +143,6 @@ class SharesReminderJobTest extends \Test\TestCase {
 	}
 
 	/**
-	 * @dataProvider dataSharesReminder
 	 *
 	 * @param \DateTime|null $expirationDate Share expiration date
 	 * @param string $email Share with this email. If empty, the share is of type TYPE_USER and the sharee is user2
@@ -151,12 +150,13 @@ class SharesReminderJobTest extends \Test\TestCase {
 	 * @param int $permissions
 	 * @param bool $shouldBeReminded
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataSharesReminder')]
 	public function testSharesReminder(
 		?\DateTime $expirationDate, string $email, bool $isEmpty, int $permissions, bool $shouldBeReminded,
 	): void {
 		$this->loginAsUser($this->user1);
 
-		$user1Folder = \OC::$server->get(IRootFolder::class)->getUserFolder($this->user1);
+		$user1Folder = Server::get(IRootFolder::class)->getUserFolder($this->user1);
 		$testFolder = $user1Folder->newFolder('test');
 
 		if (!$isEmpty) {

@@ -10,6 +10,7 @@ namespace OC\Files;
 use OC\Files\Mount\HomeMountPoint;
 use OCA\Files_Sharing\External\Mount;
 use OCA\Files_Sharing\ISharedMountPoint;
+use OCP\Constants;
 use OCP\Files\Cache\ICacheEntry;
 use OCP\Files\Mount\IMountPoint;
 use OCP\IUser;
@@ -18,28 +19,10 @@ use OCP\IUser;
  * @template-implements \ArrayAccess<string,mixed>
  */
 class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
-	private array|ICacheEntry $data;
-	/**
-	 * @var string
-	 */
-	private $path;
-
-	/**
-	 * @var \OC\Files\Storage\Storage $storage
-	 */
-	private $storage;
-
-	/**
-	 * @var string
-	 */
-	private $internalPath;
-
 	/**
 	 * @var \OCP\Files\Mount\IMountPoint
 	 */
 	private $mount;
-
-	private ?IUser $owner;
 
 	/**
 	 * @var string[]
@@ -59,20 +42,22 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	private int|float $rawSize = 0;
 
 	/**
-	 * @param string|boolean $path
+	 * @param string $path
 	 * @param Storage\Storage $storage
 	 * @param string $internalPath
 	 * @param array|ICacheEntry $data
 	 * @param IMountPoint $mount
 	 * @param ?IUser $owner
 	 */
-	public function __construct($path, $storage, $internalPath, $data, $mount, $owner = null) {
-		$this->path = $path;
-		$this->storage = $storage;
-		$this->internalPath = $internalPath;
-		$this->data = $data;
+	public function __construct(
+		private $path,
+		private $storage,
+		private $internalPath,
+		private array|ICacheEntry $data,
+		$mount,
+		private ?IUser $owner = null,
+	) {
 		$this->mount = $mount;
-		$this->owner = $owner;
 		if (isset($this->data['unencrypted_size']) && $this->data['unencrypted_size'] !== 0) {
 			$this->rawSize = $this->data['unencrypted_size'];
 		} else {
@@ -97,6 +82,7 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 
 	public function offsetGet(mixed $offset): mixed {
 		return match ($offset) {
+			'path' => $this->getPath(),
 			'type' => $this->getType(),
 			'etag' => $this->getEtag(),
 			'size' => $this->getSize(),
@@ -133,11 +119,8 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 		return isset($this->data['fileid']) ? (int)$this->data['fileid'] : null;
 	}
 
-	/**
-	 * @return string
-	 */
-	public function getMimetype() {
-		return $this->data['mimetype'];
+	public function getMimetype(): string {
+		return $this->data['mimetype'] ?? 'application/octet-stream';
 	}
 
 	/**
@@ -242,14 +225,14 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	 * @return bool
 	 */
 	public function isReadable() {
-		return $this->checkPermissions(\OCP\Constants::PERMISSION_READ);
+		return $this->checkPermissions(Constants::PERMISSION_READ);
 	}
 
 	/**
 	 * @return bool
 	 */
 	public function isUpdateable() {
-		return $this->checkPermissions(\OCP\Constants::PERMISSION_UPDATE);
+		return $this->checkPermissions(Constants::PERMISSION_UPDATE);
 	}
 
 	/**
@@ -258,21 +241,21 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	 * @return bool
 	 */
 	public function isCreatable() {
-		return $this->checkPermissions(\OCP\Constants::PERMISSION_CREATE);
+		return $this->checkPermissions(Constants::PERMISSION_CREATE);
 	}
 
 	/**
 	 * @return bool
 	 */
 	public function isDeletable() {
-		return $this->checkPermissions(\OCP\Constants::PERMISSION_DELETE);
+		return $this->checkPermissions(Constants::PERMISSION_DELETE);
 	}
 
 	/**
 	 * @return bool
 	 */
 	public function isShareable() {
-		return $this->checkPermissions(\OCP\Constants::PERMISSION_SHARE);
+		return $this->checkPermissions(Constants::PERMISSION_SHARE);
 	}
 
 	/**
@@ -380,6 +363,10 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 
 	public function getUploadTime(): int {
 		return (int)$this->data['upload_time'];
+	}
+
+	public function getLastActivity(): int {
+		return max($this->getUploadTime(), $this->getMTime());
 	}
 
 	public function getParentId(): int {

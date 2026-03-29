@@ -1,10 +1,12 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 namespace OC\Collaboration\Collaborators;
 
+use OCA\Federation\TrustedServers;
 use OCP\Collaboration\Collaborators\ISearchPlugin;
 use OCP\Collaboration\Collaborators\ISearchResult;
 use OCP\Collaboration\Collaborators\SearchResultType;
@@ -25,6 +27,7 @@ class LookupPlugin implements ISearchPlugin {
 		IUserSession $userSession,
 		private ICloudIdManager $cloudIdManager,
 		private LoggerInterface $logger,
+		private ?TrustedServers $trustedServers,
 	) {
 		$currentUserCloudId = $userSession->getUser()->getCloudId();
 		$this->currentUserRemote = $cloudIdManager->resolveCloudId($currentUserCloudId)->getRemote();
@@ -32,11 +35,13 @@ class LookupPlugin implements ISearchPlugin {
 
 	public function search($search, $limit, $offset, ISearchResult $searchResult): bool {
 		$isGlobalScaleEnabled = $this->config->getSystemValueBool('gs.enabled', false);
-		$isLookupServerEnabled = $this->config->getAppValue('files_sharing', 'lookupServerEnabled', 'yes') === 'yes';
+		$isLookupServerEnabled = $this->config->getAppValue('files_sharing', 'lookupServerEnabled', 'no') === 'yes';
 		$hasInternetConnection = $this->config->getSystemValueBool('has_internet_connection', true);
 
-		// if case of Global Scale we always search the lookup server
-		if (!$isGlobalScaleEnabled && (!$isLookupServerEnabled || !$hasInternetConnection)) {
+		// If case of Global Scale we always search the lookup server
+		// TODO: Reconsider using the lookup server for non-global scale
+		// if (!$isGlobalScaleEnabled && (!$isLookupServerEnabled || !$hasInternetConnection || $disableLookupServer)) {
+		if (!$isGlobalScaleEnabled) {
 			return false;
 		}
 
@@ -79,6 +84,8 @@ class LookupPlugin implements ISearchPlugin {
 						'shareType' => IShare::TYPE_REMOTE,
 						'globalScale' => $isGlobalScaleEnabled,
 						'shareWith' => $lookup['federationId'],
+						'server' => $remote,
+						'isTrustedServer' => $this->trustedServers?->isTrustedServer($remote) ?? false,
 					],
 					'extra' => $lookup,
 				];

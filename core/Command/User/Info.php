@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -6,6 +7,8 @@
 namespace OC\Core\Command\User;
 
 use OC\Core\Command\Base;
+use OCP\Files\ISetupManager;
+use OCP\Files\NotFoundException;
 use OCP\IGroupManager;
 use OCP\IUser;
 use OCP\IUserManager;
@@ -19,11 +22,12 @@ class Info extends Base {
 	public function __construct(
 		protected IUserManager $userManager,
 		protected IGroupManager $groupManager,
+		protected ISetupManager $setupManager,
 	) {
 		parent::__construct();
 	}
 
-	protected function configure() {
+	protected function configure(): void {
 		$this
 			->setName('user:info')
 			->setDescription('show user info')
@@ -56,7 +60,8 @@ class Info extends Base {
 			'groups' => $groups,
 			'quota' => $user->getQuota(),
 			'storage' => $this->getStorageInfo($user),
-			'last_seen' => date(\DateTimeInterface::ATOM, $user->getLastLogin()), // ISO-8601
+			'first_seen' => $this->formatLoginDate($user->getFirstLogin()),
+			'last_seen' => $this->formatLoginDate($user->getLastLogin()),
 			'user_directory' => $user->getHome(),
 			'backend' => $user->getBackendClassName()
 		];
@@ -64,16 +69,26 @@ class Info extends Base {
 		return 0;
 	}
 
+	private function formatLoginDate(int $timestamp): string {
+		if ($timestamp < 0) {
+			return 'unknown';
+		} elseif ($timestamp === 0) {
+			return 'never';
+		} else {
+			return date(\DateTimeInterface::ATOM, $timestamp); // ISO-8601
+		}
+	}
+
 	/**
 	 * @param IUser $user
 	 * @return array
 	 */
 	protected function getStorageInfo(IUser $user): array {
-		\OC_Util::tearDownFS();
-		\OC_Util::setupFS($user->getUID());
+		$this->setupManager->tearDown();
+		$this->setupManager->setupForUser($user);
 		try {
 			$storage = \OC_Helper::getStorageInfo('/');
-		} catch (\OCP\Files\NotFoundException $e) {
+		} catch (NotFoundException $e) {
 			return [];
 		}
 		return [
@@ -92,7 +107,7 @@ class Info extends Base {
 	 */
 	public function completeArgumentValues($argumentName, CompletionContext $context) {
 		if ($argumentName === 'user') {
-			return array_map(static fn (IUser $user) => $user->getUID(), $this->userManager->search($context->getCurrentWord()));
+			return array_map(static fn (IUser $user) => $user->getUID(), $this->userManager->searchDisplayName($context->getCurrentWord()));
 		}
 		return [];
 	}

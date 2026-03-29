@@ -6,7 +6,6 @@ import { getRowForFile } from '../../files/FilesUtils.ts'
 import { openSharingPanel } from '../FilesSharingUtils.ts'
 
 describe('files_sharing: Public share - File drop', { testIsolation: true }, () => {
-
 	let shareUrl: string
 	let user: string
 	const shareName = 'shared'
@@ -117,7 +116,9 @@ describe('files_sharing: Public share - File drop', { testIsolation: true }, () 
 				request.continue()
 			} else {
 				// We delay the second one until we checked that the progress bar is visible
-				request.on('response', async () => { await promise })
+				request.on('response', async () => {
+					await promise
+				})
 			}
 		}).as('uploadFile')
 
@@ -149,9 +150,12 @@ describe('files_sharing: Public share - File drop', { testIsolation: true }, () 
 		after(() => cy.runOccCommand('config:app:delete core shareapi_public_link_disclaimertext'))
 
 		it('shows ToS on file-drop view', () => {
-			cy.contains(`Upload files to ${shareName}`)
+			cy.get('[data-cy-files-sharing-file-drop]')
+				.contains(`Upload files to ${shareName}`)
 				.should('be.visible')
-				.should('contain.text', 'agree to the terms of service')
+			cy.get('[data-cy-files-sharing-file-drop]')
+				.contains('agree to the terms of service')
+				.should('be.visible')
 			cy.findByRole('button', { name: /Terms of service/i })
 				.should('be.visible')
 				.click()

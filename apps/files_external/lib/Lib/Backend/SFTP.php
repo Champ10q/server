@@ -1,4 +1,7 @@
 <?php
+
+declare(strict_types=1);
+
 /**
  * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -27,6 +30,7 @@ class SFTP extends Backend {
 			])
 			->addAuthScheme(AuthMechanism::SCHEME_PASSWORD)
 			->addAuthScheme(AuthMechanism::SCHEME_PUBLICKEY)
+			->addAuthScheme(AuthMechanism::SCHEME_OAUTH2)
 			->setLegacyAuthMechanism($legacyAuth)
 		;
 	}

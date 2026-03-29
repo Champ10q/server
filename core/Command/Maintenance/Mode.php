@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 /**
  * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -24,7 +26,8 @@ class Mode extends Command {
 	protected function configure() {
 		$this
 			->setName('maintenance:mode')
-			->setDescription('set maintenance mode')
+			->setDescription('Show or toggle maintenance mode status')
+			->setHelp('Maintenance mode prevents new logins, locks existing sessions, and disables background jobs.')
 			->addOption(
 				'on',
 				null,

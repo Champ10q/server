@@ -8,8 +8,6 @@
 namespace OCA\User_LDAP\Command;
 
 use OCA\User_LDAP\Group_Proxy;
-use OCA\User_LDAP\Helper;
-use OCA\User_LDAP\LDAP;
 use OCA\User_LDAP\User_Proxy;
 use OCP\IConfig;
 
@@ -81,10 +79,6 @@ class Search extends Command {
 	}
 
 	protected function execute(InputInterface $input, OutputInterface $output): int {
-		$helper = new Helper($this->ocConfig, \OC::$server->getDatabaseConnection());
-		$configPrefixes = $helper->getServerConfigurationPrefixes(true);
-		$ldapWrapper = new LDAP();
-
 		$offset = (int)$input->getOption('offset');
 		$limit = (int)$input->getOption('limit');
 		$this->validateOffsetAndLimit($offset, $limit);

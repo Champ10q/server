@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -13,14 +14,9 @@ use function is_resource;
  * Object store that wraps a storage backend, mostly for testing purposes
  */
 class StorageObjectStore implements IObjectStore {
-	/** @var IStorage */
-	private $storage;
-
-	/**
-	 * @param IStorage $storage
-	 */
-	public function __construct(IStorage $storage) {
-		$this->storage = $storage;
+	public function __construct(
+		private IStorage $storage,
+	) {
 	}
 
 	/**
@@ -72,5 +68,9 @@ class StorageObjectStore implements IObjectStore {
 
 	public function copyObject($from, $to) {
 		$this->storage->copy($from, $to);
+	}
+
+	public function preSignedUrl(string $urn, \DateTimeInterface $expiration): ?string {
+		return null;
 	}
 }

@@ -4,6 +4,9 @@ name: DAV integration tests
 on:
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: integration-caldav-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
@@ -40,10 +43,9 @@ jobs:
     if: needs.changes.outputs.src != 'false' && github.repository_owner != 'nextcloud-gmbh'
 
     strategy:
-      # do not stop on another job's failure
       fail-fast: false
       matrix:
-        php-versions: ['8.1']
+        php-versions: ['8.2']
         endpoint: ['old', 'new']
         service: ['CalDAV', 'CardDAV']
 
@@ -51,12 +53,14 @@ jobs:
 
     steps:
         - name: Checkout server
-          uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+          uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
           with:
+            persist-credentials: false
             submodules: true
 
         - name: Set up php ${{ matrix.php-versions }}
-          uses: shivammathur/setup-php@c541c155eee45413f5b09a52248675b1a2575231 #v2.31.1
+          uses: shivammathur/setup-php@44454db4f0199b8b9685a5d763dc37cbf79108e1 #v2.36.0
+          timeout-minutes: 5
           with:
             php-version: ${{ matrix.php-versions }}
             # https://docs.nextcloud.com/server/stable/admin_manual/installation/source_installation.html#prerequisites-for-manual-installation
@@ -67,7 +71,7 @@ jobs:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
         - name: Set up Python
-          uses: LizardByte/setup-python-action@master
+          uses: LizardByte/actions/actions/setup_python@70bb8d394d1c92f6113aeec6ae9cc959a5763d15 # v2026.227.200013
           with:
             python-version: '2.7'
 

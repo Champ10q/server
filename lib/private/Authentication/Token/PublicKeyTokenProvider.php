@@ -15,7 +15,9 @@ use OC\Authentication\Exceptions\WipeTokenException;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Db\TTransactional;
 use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\Authentication\Events\TokenInvalidatedEvent;
 use OCP\Authentication\Token\IToken as OCPIToken;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\ICache;
 use OCP\ICacheFactory;
 use OCP\IConfig;
@@ -32,48 +34,23 @@ class PublicKeyTokenProvider implements IProvider {
 
 	use TTransactional;
 
-	/** @var PublicKeyTokenMapper */
-	private $mapper;
-
-	/** @var ICrypto */
-	private $crypto;
-
-	/** @var IConfig */
-	private $config;
-
-	private IDBConnection $db;
-
-	/** @var LoggerInterface */
-	private $logger;
-
-	/** @var ITimeFactory */
-	private $time;
-
 	/** @var ICache */
 	private $cache;
 
-	/** @var IHasher */
-	private $hasher;
-
-	public function __construct(PublicKeyTokenMapper $mapper,
-		ICrypto $crypto,
-		IConfig $config,
-		IDBConnection $db,
-		LoggerInterface $logger,
-		ITimeFactory $time,
-		IHasher $hasher,
-		ICacheFactory $cacheFactory) {
-		$this->mapper = $mapper;
-		$this->crypto = $crypto;
-		$this->config = $config;
-		$this->db = $db;
-		$this->logger = $logger;
-		$this->time = $time;
-
+	public function __construct(
+		private PublicKeyTokenMapper $mapper,
+		private ICrypto $crypto,
+		private IConfig $config,
+		private IDBConnection $db,
+		private LoggerInterface $logger,
+		private ITimeFactory $time,
+		private IHasher $hasher,
+		ICacheFactory $cacheFactory,
+		private IEventDispatcher $eventDispatcher,
+	) {
 		$this->cache = $cacheFactory->isLocalCacheAvailable()
 			? $cacheFactory->createLocal('authtoken_')
 			: $cacheFactory->createInMemory();
-		$this->hasher = $hasher;
 	}
 
 	/**
@@ -263,9 +240,17 @@ class PublicKeyTokenProvider implements IProvider {
 
 	public function invalidateToken(string $token) {
 		$tokenHash = $this->hashToken($token);
+		$tokenEntry = null;
+		try {
+			$tokenEntry = $this->mapper->getToken($tokenHash);
+		} catch (DoesNotExistException) {
+		}
 		$this->mapper->invalidate($this->hashToken($token));
 		$this->mapper->invalidate($this->hashTokenWithEmptySecret($token));
 		$this->cacheInvalidHash($tokenHash);
+		if ($tokenEntry !== null) {
+			$this->eventDispatcher->dispatchTyped(new TokenInvalidatedEvent($tokenEntry));
+		}
 	}
 
 	public function invalidateTokenById(string $uid, int $id) {
@@ -275,7 +260,7 @@ class PublicKeyTokenProvider implements IProvider {
 		}
 		$this->mapper->invalidate($token->getToken());
 		$this->cacheInvalidHash($token->getToken());
-
+		$this->eventDispatcher->dispatchTyped(new TokenInvalidatedEvent($token));
 	}
 
 	public function invalidateOldTokens() {
@@ -350,7 +335,7 @@ class PublicKeyTokenProvider implements IProvider {
 			throw new InvalidTokenException('Invalid token type');
 		}
 
-		$this->atomic(function () use ($password, $token) {
+		$this->atomic(function () use ($password, $token): void {
 			// When changing passwords all temp tokens are deleted
 			$this->mapper->deleteTempToken($token);
 
@@ -490,6 +475,12 @@ class PublicKeyTokenProvider implements IProvider {
 		$dbToken->setLastCheck($this->time->getTime());
 		$dbToken->setVersion(PublicKeyToken::VERSION);
 
+		if ($type === OCPIToken::ONETIME_TOKEN) {
+			// Minimum duration is 2 minutes as shown in the UI
+			$expirationDuration = max(120, $this->config->getSystemValueInt('auth_onetime_token_validity', 120));
+			$dbToken->setExpires($this->time->getTime() + $expirationDuration);
+		}
+
 		return $dbToken;
 	}
 
@@ -509,7 +500,7 @@ class PublicKeyTokenProvider implements IProvider {
 			return;
 		}
 
-		$this->atomic(function () use ($password, $uid) {
+		$this->atomic(function () use ($password, $uid): void {
 			// Update the password for all tokens
 			$tokens = $this->mapper->getTokenByUser($uid);
 			$newPasswordHash = null;

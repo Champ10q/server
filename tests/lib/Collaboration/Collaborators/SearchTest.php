@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -29,9 +30,7 @@ class SearchTest extends TestCase {
 		$this->search = new Search($this->container);
 	}
 
-	/**
-	 * @dataProvider dataSearchSharees
-	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataSearchSharees')]
 	public function testSearch(
 		string $searchTerm,
 		array $shareTypes,
@@ -92,22 +91,22 @@ class SearchTest extends TestCase {
 			->willReturnCallback(function ($class) use ($searchResult, $userPlugin, $groupPlugin, $remotePlugin, $mailPlugin) {
 				if ($class === SearchResult::class) {
 					return $searchResult;
-				} elseif ($class === $userPlugin) {
+				} elseif ($class === 'user') {
 					return $userPlugin;
-				} elseif ($class === $groupPlugin) {
+				} elseif ($class === 'group') {
 					return $groupPlugin;
-				} elseif ($class === $remotePlugin) {
+				} elseif ($class === 'remote') {
 					return $remotePlugin;
-				} elseif ($class === $mailPlugin) {
+				} elseif ($class === 'mail') {
 					return $mailPlugin;
 				}
 				return null;
 			});
 
-		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_USER', 'class' => $userPlugin]);
-		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_GROUP', 'class' => $groupPlugin]);
-		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_REMOTE', 'class' => $remotePlugin]);
-		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_EMAIL', 'class' => $mailPlugin]);
+		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_USER', 'class' => 'user']);
+		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_GROUP', 'class' => 'group']);
+		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_REMOTE', 'class' => 'remote']);
+		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_EMAIL', 'class' => 'mail']);
 
 		[$results, $moreResults] = $this->search->search($searchTerm, $shareTypes, false, $perPage, $perPage * ($page - 1));
 
@@ -115,7 +114,7 @@ class SearchTest extends TestCase {
 		$this->assertSame($expectedMoreResults, $moreResults);
 	}
 
-	public function dataSearchSharees() {
+	public static function dataSearchSharees(): array {
 		return [
 			// #0
 			[

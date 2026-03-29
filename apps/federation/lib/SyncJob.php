@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 /**
  * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -27,7 +29,6 @@ class SyncJob extends TimedJob {
 		$this->syncService->syncThemAll(function ($url, $ex): void {
 			if ($ex instanceof \Exception) {
 				$this->logger->error("Error while syncing $url.", [
-					'app' => 'fed-sync',
 					'exception' => $ex,
 				]);
 			}

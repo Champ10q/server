@@ -3,18 +3,19 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { User } from '@nextcloud/cypress'
-import { createFolder, getRowForFile, navigateToFolder } from '../files/FilesUtils'
-import { createFileRequest } from './FilesSharingUtils'
+import type { User } from '@nextcloud/e2e-test-server/cypress'
 
-const enterGuestName = (name: string) => {
+import { createFolder, getRowForFile, navigateToFolder } from '../files/FilesUtils.ts'
+import { createFileRequest } from './FilesSharingUtils.ts'
+
+function enterGuestName(name: string) {
 	cy.findByRole('dialog', { name: /Upload files to/ })
 		.should('be.visible')
 		.within(() => {
-			cy.findByRole('textbox', { name: 'Nickname' })
+			cy.findByRole('textbox', { name: 'Name' })
 				.should('be.visible')
 
-			cy.findByRole('textbox', { name: 'Nickname' })
+			cy.findByRole('textbox', { name: 'Name' })
 				.type(`{selectall}${name}`)
 
 			cy.findByRole('button', { name: 'Submit name' })

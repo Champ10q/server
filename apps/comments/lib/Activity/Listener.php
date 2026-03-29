@@ -12,7 +12,6 @@ use OCP\App\IAppManager;
 use OCP\Comments\CommentsEvent;
 use OCP\Files\Config\IMountProviderCollection;
 use OCP\Files\IRootFolder;
-use OCP\Files\Node;
 use OCP\IUser;
 use OCP\IUserSession;
 use OCP\Share\IShareHelper;
@@ -31,7 +30,7 @@ class Listener {
 	public function commentEvent(CommentsEvent $event): void {
 		if ($event->getComment()->getObjectType() !== 'files'
 			|| $event->getEvent() !== CommentsEvent::EVENT_ADD
-			|| !$this->appManager->isInstalled('activity')) {
+			|| !$this->appManager->isEnabledForAnyone('activity')) {
 			// Comment not for file, not adding a comment or no activity-app enabled (save the energy)
 			return;
 		}
@@ -47,10 +46,8 @@ class Listener {
 		foreach ($mounts as $mount) {
 			$owner = $mount->getUser()->getUID();
 			$ownerFolder = $this->rootFolder->getUserFolder($owner);
-			$nodes = $ownerFolder->getById((int)$event->getComment()->getObjectId());
-			if (!empty($nodes)) {
-				/** @var Node $node */
-				$node = array_shift($nodes);
+			$node = $ownerFolder->getFirstNodeById((int)$event->getComment()->getObjectId());
+			if ($node !== null) {
 				$al = $this->shareHelper->getPathsForAccessList($node);
 				$users += $al['users'];
 			}

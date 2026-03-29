@@ -68,7 +68,7 @@ interface IRegistrationContext {
 	 *
 	 * @param string $name
 	 * @param callable $factory
-	 * @psalm-param callable(\Psr\Container\ContainerInterface): mixed $factory
+	 * @psalm-param callable(IContainer): mixed $factory
 	 * @param bool $shared If set to true the factory result will be cached otherwise every query will call the factory again
 	 *
 	 * @return void
@@ -415,6 +415,19 @@ interface IRegistrationContext {
 	public function registerTaskProcessingTaskType(string $taskProcessingTaskTypeClass): void;
 
 	/**
+	 * Register an implementation of \OCP\Files\Conversion\IConversionProvider
+	 * that will handle the conversion of files from one MIME type to another
+	 *
+	 * @param string $class
+	 * @psalm-param class-string<\OCP\Files\Conversion\IConversionProvider> $class
+	 *
+	 * @return void
+	 *
+	 * @since 31.0.0
+	 */
+	public function registerFileConversionProvider(string $class): void;
+
+	/**
 	 * Register a mail provider
 	 *
 	 * @param string $class
@@ -430,7 +443,7 @@ interface IRegistrationContext {
 	 *
 	 * @param string $configLexiconClass
 	 *
-	 * @psalm-param class-string<\NCU\Config\Lexicon\IConfigLexicon> $configLexiconClass
+	 * @psalm-param class-string<\OCP\Config\Lexicon\ILexicon> $configLexiconClass
 	 * @since 31.0.0
 	 */
 	public function registerConfigLexicon(string $configLexiconClass): void;

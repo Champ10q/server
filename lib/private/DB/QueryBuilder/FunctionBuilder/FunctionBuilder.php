@@ -1,32 +1,25 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 namespace OC\DB\QueryBuilder\FunctionBuilder;
 
-use OC\DB\Connection;
 use OC\DB\QueryBuilder\QueryFunction;
 use OC\DB\QueryBuilder\QuoteHelper;
 use OCP\DB\QueryBuilder\IFunctionBuilder;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\DB\QueryBuilder\IQueryFunction;
 use OCP\IDBConnection;
+use Override;
 
 class FunctionBuilder implements IFunctionBuilder {
-	/** @var IDBConnection|Connection */
-	protected $connection;
-
-	/** @var IQueryBuilder */
-	protected $queryBuilder;
-
-	/** @var QuoteHelper */
-	protected $helper;
-
-	public function __construct(IDBConnection $connection, IQueryBuilder $queryBuilder, QuoteHelper $helper) {
-		$this->connection = $connection;
-		$this->queryBuilder = $queryBuilder;
-		$this->helper = $helper;
+	public function __construct(
+		protected IDBConnection $connection,
+		protected IQueryBuilder $queryBuilder,
+		protected QuoteHelper $helper,
+	) {
 	}
 
 	public function md5($input): IQueryFunction {
@@ -103,5 +96,10 @@ class FunctionBuilder implements IFunctionBuilder {
 
 	public function least($x, $y): IQueryFunction {
 		return new QueryFunction('LEAST(' . $this->helper->quoteColumnName($x) . ', ' . $this->helper->quoteColumnName($y) . ')');
+	}
+
+	#[Override]
+	public function now(): IQueryFunction {
+		return new QueryFunction('NOW()');
 	}
 }

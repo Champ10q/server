@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 /// <reference types="cypress-if" />
-import { User } from '@nextcloud/cypress'
-import { getUserListRow, handlePasswordConfirmation } from './usersUtils'
+
+import { User } from '@nextcloud/e2e-test-server/cypress'
+import { getUserListRow, handlePasswordConfirmation } from './usersUtils.ts'
 
 const admin = new User('admin', 'admin')
 const john = new User('john', '123456')
@@ -115,11 +116,12 @@ describe('Settings: Create and delete accounts', function() {
 
 			// The "Delete account" action in the actions menu is shown and clicked
 			cy.get('.action-item__popper .action').contains('Delete account').should('exist').click({ force: true })
-			// And confirmation dialog accepted
-			cy.get('.nc-generic-dialog button').contains(`Delete ${testUser.userId}`).click({ force: true })
 
 			// Make sure no confirmation modal is shown
 			handlePasswordConfirmation(admin.password)
+
+			// And confirmation dialog accepted
+			cy.get('.nc-generic-dialog button').contains(`Delete ${testUser.userId}`).click({ force: true })
 
 			// deleted clicked the user is not shown anymore
 			getUserListRow(testUser.userId).should('not.exist')

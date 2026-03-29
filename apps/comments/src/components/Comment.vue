@@ -3,14 +3,16 @@
   - SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 <template>
-	<component :is="tag"
+	<component
+		:is="tag"
 		v-show="!deleted && !isLimbo"
-		:class="{'comment--loading': loading}"
+		:class="{ 'comment--loading': loading }"
 		class="comment">
 		<!-- Comment header toolbar -->
 		<div class="comment__side">
 			<!-- Author -->
-			<NcAvatar class="comment__avatar"
+			<NcAvatar
+				class="comment__avatar"
 				:display-name="actorDisplayName"
 				:user="actorId"
 				:size="32" />
@@ -23,18 +25,20 @@
 					show if we have a message id and current user is author -->
 				<NcActions v-if="isOwnComment && id && !loading" class="comment__actions">
 					<template v-if="!editing">
-						<NcActionButton close-after-click
+						<NcActionButton
+							close-after-click
 							@click="onEdit">
 							<template #icon>
-								<IconEdit :size="20" />
+								<IconPencilOutline :size="20" />
 							</template>
 							{{ t('comments', 'Edit comment') }}
 						</NcActionButton>
 						<NcActionSeparator />
-						<NcActionButton close-after-click
+						<NcActionButton
+							close-after-click
 							@click="onDeleteWithUndo">
 							<template #icon>
-								<IconDelete :size="20" />
+								<IconTrashCanOutline :size="20" />
 							</template>
 							{{ t('comments', 'Delete comment') }}
 						</NcActionButton>
@@ -52,7 +56,8 @@
 				<div v-if="id && loading" class="comment_loading icon-loading-small" />
 
 				<!-- Relative time to the comment creation -->
-				<NcDateTime v-else-if="creationDateTime"
+				<NcDateTime
+					v-else-if="creationDateTime"
 					class="comment__timestamp"
 					:timestamp="timestamp"
 					:ignore-seconds="true" />
@@ -61,19 +66,21 @@
 			<!-- Message editor -->
 			<form v-if="editor || editing" class="comment__editor" @submit.prevent>
 				<div class="comment__editor-group">
-					<NcRichContenteditable ref="editor"
+					<NcRichContenteditable
+						ref="editor"
 						:auto-complete="autoComplete"
 						:contenteditable="!loading"
 						:label="editor ? t('comments', 'New comment') : t('comments', 'Edit comment')"
-						:placeholder="t('comments', 'Write a comment …')"
-						:value="localMessage"
+						:placeholder="t('comments', 'Write a comment …')"
+						:model-value="localMessage"
 						:user-data="userData"
 						aria-describedby="tab-comments__editor-description"
 						@update:value="updateLocalMessage"
 						@submit="onSubmit" />
 					<div class="comment__submit">
-						<NcButton type="tertiary-no-background"
-							native-type="submit"
+						<NcButton
+							variant="tertiary-no-background"
+							type="submit"
 							:aria-label="t('comments', 'Post comment')"
 							:disabled="isEmptyMessage"
 							@click="onSubmit">
@@ -90,14 +97,14 @@
 			</form>
 
 			<!-- Message content -->
-			<!-- The html is escaped and sanitized before rendering -->
-			<!-- eslint-disable vue/no-v-html-->
-			<div v-else
-				:class="{'comment__message--expanded': expanded}"
+			<NcRichText
+				v-else
 				class="comment__message"
-				@click="onExpand"
-				v-html="renderedContent" />
-			<!-- eslint-enable vue/no-v-html-->
+				:class="{ 'comment__message--expanded': expanded }"
+				:text="richContent.message"
+				:arguments="richContent.mentions"
+				use-markdown
+				@click.native="onExpand" />
 		</div>
 	</component>
 </template>
@@ -105,36 +112,35 @@
 <script>
 import { getCurrentUser } from '@nextcloud/auth'
 import { translate as t } from '@nextcloud/l10n'
-
-import NcActionButton from '@nextcloud/vue/dist/Components/NcActionButton.js'
-import NcActions from '@nextcloud/vue/dist/Components/NcActions.js'
-import NcActionSeparator from '@nextcloud/vue/dist/Components/NcActionSeparator.js'
-import NcAvatar from '@nextcloud/vue/dist/Components/NcAvatar.js'
-import NcButton from '@nextcloud/vue/dist/Components/NcButton.js'
-import NcDateTime from '@nextcloud/vue/dist/Components/NcDateTime.js'
-import NcLoadingIcon from '@nextcloud/vue/dist/Components/NcLoadingIcon.js'
-import RichEditorMixin from '@nextcloud/vue/dist/Mixins/richEditor.js'
-
+import { mapStores } from 'pinia'
+import NcActionButton from '@nextcloud/vue/components/NcActionButton'
+import NcActions from '@nextcloud/vue/components/NcActions'
+import NcActionSeparator from '@nextcloud/vue/components/NcActionSeparator'
+import NcAvatar from '@nextcloud/vue/components/NcAvatar'
+import NcButton from '@nextcloud/vue/components/NcButton'
+import NcDateTime from '@nextcloud/vue/components/NcDateTime'
+import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
+import NcUserBubble from '@nextcloud/vue/components/NcUserBubble'
 import IconArrowRight from 'vue-material-design-icons/ArrowRight.vue'
 import IconClose from 'vue-material-design-icons/Close.vue'
-import IconDelete from 'vue-material-design-icons/Delete.vue'
-import IconEdit from 'vue-material-design-icons/Pencil.vue'
-
+import IconPencilOutline from 'vue-material-design-icons/PencilOutline.vue'
+import IconTrashCanOutline from 'vue-material-design-icons/TrashCanOutline.vue'
 import CommentMixin from '../mixins/CommentMixin.js'
-import { mapStores } from 'pinia'
 import { useDeletedCommentLimbo } from '../store/deletedCommentLimbo.js'
 
 // Dynamic loading
-const NcRichContenteditable = () => import('@nextcloud/vue/dist/Components/NcRichContenteditable.js')
+const NcRichContenteditable = () => import('@nextcloud/vue/components/NcRichContenteditable')
+const NcRichText = () => import('@nextcloud/vue/components/NcRichText')
 
 export default {
+	/* eslint vue/multi-word-component-names: "warn" */
 	name: 'Comment',
 
 	components: {
 		IconArrowRight,
 		IconClose,
-		IconDelete,
-		IconEdit,
+		IconTrashCanOutline,
+		IconPencilOutline,
 		NcActionButton,
 		NcActions,
 		NcActionSeparator,
@@ -143,8 +149,10 @@ export default {
 		NcDateTime,
 		NcLoadingIcon,
 		NcRichContenteditable,
+		NcRichText,
 	},
-	mixins: [RichEditorMixin, CommentMixin],
+
+	mixins: [CommentMixin],
 
 	inheritAttrs: false,
 
@@ -153,10 +161,12 @@ export default {
 			type: String,
 			required: true,
 		},
+
 		actorId: {
 			type: String,
 			required: true,
 		},
+
 		creationDateTime: {
 			type: String,
 			default: null,
@@ -176,6 +186,11 @@ export default {
 		autoComplete: {
 			type: Function,
 			required: true,
+		},
+
+		userData: {
+			type: Object,
+			default: () => ({}),
 		},
 
 		tag: {
@@ -206,16 +221,25 @@ export default {
 			return getCurrentUser().uid === this.actorId
 		},
 
-		/**
-		 * Rendered content as html string
-		 *
-		 * @return {string}
-		 */
-		renderedContent() {
-			if (this.isEmptyMessage) {
-				return ''
-			}
-			return this.renderContent(this.localMessage)
+		richContent() {
+			const mentions = {}
+			let message = this.localMessage
+
+			Object.keys(this.userData).forEach((user, index) => {
+				const key = `mention-${index}`
+				const regex = new RegExp(`@${user}|@"${user}"`, 'g')
+				message = message.replace(regex, `{${key}}`)
+				mentions[key] = {
+					component: NcUserBubble,
+					props: {
+						user,
+						displayName: this.userData[user].label,
+						primary: this.userData[user].primary,
+					},
+				}
+			})
+
+			return { mentions, message }
 		},
 
 		isEmptyMessage() {
@@ -307,6 +331,7 @@ $comment-padding: 10px;
 		display: flex;
 		flex-grow: 1;
 		flex-direction: column;
+		container-type: inline-size;
 	}
 
 	&__header {
@@ -351,13 +376,19 @@ $comment-padding: 10px;
 
 	&__message {
 		white-space: pre-wrap;
-		word-break: break-word;
-		max-height: 70px;
-		overflow: hidden;
+		word-break: normal;
+		max-height: 200px;
+		overflow: auto;
+		scrollbar-gutter: stable;
+		scrollbar-width: thin;
 		margin-top: -6px;
 		&--expanded {
 			max-height: none;
 			overflow: visible;
+		}
+		:deep(img) {
+			max-width: 100%;
+			height: auto;
 		}
 	}
 }

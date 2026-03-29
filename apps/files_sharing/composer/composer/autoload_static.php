@@ -7,14 +7,14 @@ namespace Composer\Autoload;
 class ComposerStaticInitFiles_Sharing
 {
     public static $prefixLengthsPsr4 = array (
-        'O' => 
+        'O' =>
         array (
             'OCA\\Files_Sharing\\' => 18,
         ),
     );
 
     public static $prefixDirsPsr4 = array (
-        'OCA\\Files_Sharing\\' => 
+        'OCA\\Files_Sharing\\' =>
         array (
             0 => __DIR__ . '/..' . '/../lib',
         ),
@@ -43,6 +43,8 @@ class ComposerStaticInitFiles_Sharing
         'OCA\\Files_Sharing\\Command\\DeleteOrphanShares' => __DIR__ . '/..' . '/../lib/Command/DeleteOrphanShares.php',
         'OCA\\Files_Sharing\\Command\\ExiprationNotification' => __DIR__ . '/..' . '/../lib/Command/ExiprationNotification.php',
         'OCA\\Files_Sharing\\Command\\FixShareOwners' => __DIR__ . '/..' . '/../lib/Command/FixShareOwners.php',
+        'OCA\\Files_Sharing\\Command\\ListShares' => __DIR__ . '/..' . '/../lib/Command/ListShares.php',
+        'OCA\\Files_Sharing\\Config\\ConfigLexicon' => __DIR__ . '/..' . '/../lib/Config/ConfigLexicon.php',
         'OCA\\Files_Sharing\\Controller\\AcceptController' => __DIR__ . '/..' . '/../lib/Controller/AcceptController.php',
         'OCA\\Files_Sharing\\Controller\\DeletedShareAPIController' => __DIR__ . '/..' . '/../lib/Controller/DeletedShareAPIController.php',
         'OCA\\Files_Sharing\\Controller\\ExternalSharesController' => __DIR__ . '/..' . '/../lib/Controller/ExternalSharesController.php',
@@ -58,11 +60,14 @@ class ComposerStaticInitFiles_Sharing
         'OCA\\Files_Sharing\\Event\\BeforeTemplateRenderedEvent' => __DIR__ . '/..' . '/../lib/Event/BeforeTemplateRenderedEvent.php',
         'OCA\\Files_Sharing\\Event\\ShareLinkAccessedEvent' => __DIR__ . '/..' . '/../lib/Event/ShareLinkAccessedEvent.php',
         'OCA\\Files_Sharing\\Event\\ShareMountedEvent' => __DIR__ . '/..' . '/../lib/Event/ShareMountedEvent.php',
+        'OCA\\Files_Sharing\\Event\\UserShareAccessUpdatedEvent' => __DIR__ . '/..' . '/../lib/Event/UserShareAccessUpdatedEvent.php',
         'OCA\\Files_Sharing\\Exceptions\\BrokenPath' => __DIR__ . '/..' . '/../lib/Exceptions/BrokenPath.php',
         'OCA\\Files_Sharing\\Exceptions\\S2SException' => __DIR__ . '/..' . '/../lib/Exceptions/S2SException.php',
         'OCA\\Files_Sharing\\Exceptions\\SharingRightsException' => __DIR__ . '/..' . '/../lib/Exceptions/SharingRightsException.php',
         'OCA\\Files_Sharing\\ExpireSharesJob' => __DIR__ . '/..' . '/../lib/ExpireSharesJob.php',
         'OCA\\Files_Sharing\\External\\Cache' => __DIR__ . '/..' . '/../lib/External/Cache.php',
+        'OCA\\Files_Sharing\\External\\ExternalShare' => __DIR__ . '/..' . '/../lib/External/ExternalShare.php',
+        'OCA\\Files_Sharing\\External\\ExternalShareMapper' => __DIR__ . '/..' . '/../lib/External/ExternalShareMapper.php',
         'OCA\\Files_Sharing\\External\\Manager' => __DIR__ . '/..' . '/../lib/External/Manager.php',
         'OCA\\Files_Sharing\\External\\Mount' => __DIR__ . '/..' . '/../lib/External/Mount.php',
         'OCA\\Files_Sharing\\External\\MountProvider' => __DIR__ . '/..' . '/../lib/External/MountProvider.php',
@@ -74,11 +79,13 @@ class ComposerStaticInitFiles_Sharing
         'OCA\\Files_Sharing\\ISharedMountPoint' => __DIR__ . '/..' . '/../lib/ISharedMountPoint.php',
         'OCA\\Files_Sharing\\ISharedStorage' => __DIR__ . '/..' . '/../lib/ISharedStorage.php',
         'OCA\\Files_Sharing\\Listener\\BeforeDirectFileDownloadListener' => __DIR__ . '/..' . '/../lib/Listener/BeforeDirectFileDownloadListener.php',
+        'OCA\\Files_Sharing\\Listener\\BeforeNodeReadListener' => __DIR__ . '/..' . '/../lib/Listener/BeforeNodeReadListener.php',
         'OCA\\Files_Sharing\\Listener\\BeforeZipCreatedListener' => __DIR__ . '/..' . '/../lib/Listener/BeforeZipCreatedListener.php',
         'OCA\\Files_Sharing\\Listener\\LoadAdditionalListener' => __DIR__ . '/..' . '/../lib/Listener/LoadAdditionalListener.php',
         'OCA\\Files_Sharing\\Listener\\LoadPublicFileRequestAuthListener' => __DIR__ . '/..' . '/../lib/Listener/LoadPublicFileRequestAuthListener.php',
         'OCA\\Files_Sharing\\Listener\\LoadSidebarListener' => __DIR__ . '/..' . '/../lib/Listener/LoadSidebarListener.php',
         'OCA\\Files_Sharing\\Listener\\ShareInteractionListener' => __DIR__ . '/..' . '/../lib/Listener/ShareInteractionListener.php',
+        'OCA\\Files_Sharing\\Listener\\SharesUpdatedListener' => __DIR__ . '/..' . '/../lib/Listener/SharesUpdatedListener.php',
         'OCA\\Files_Sharing\\Listener\\UserAddedToGroupListener' => __DIR__ . '/..' . '/../lib/Listener/UserAddedToGroupListener.php',
         'OCA\\Files_Sharing\\Listener\\UserShareAcceptanceListener' => __DIR__ . '/..' . '/../lib/Listener/UserShareAcceptanceListener.php',
         'OCA\\Files_Sharing\\Middleware\\OCSShareAPIMiddleware' => __DIR__ . '/..' . '/../lib/Middleware/OCSShareAPIMiddleware.php',
@@ -93,15 +100,18 @@ class ComposerStaticInitFiles_Sharing
         'OCA\\Files_Sharing\\Migration\\Version24000Date20220208195521' => __DIR__ . '/..' . '/../lib/Migration/Version24000Date20220208195521.php',
         'OCA\\Files_Sharing\\Migration\\Version24000Date20220404142216' => __DIR__ . '/..' . '/../lib/Migration/Version24000Date20220404142216.php',
         'OCA\\Files_Sharing\\Migration\\Version31000Date20240821142813' => __DIR__ . '/..' . '/../lib/Migration/Version31000Date20240821142813.php',
+        'OCA\\Files_Sharing\\Migration\\Version32000Date20251017081948' => __DIR__ . '/..' . '/../lib/Migration/Version32000Date20251017081948.php',
+        'OCA\\Files_Sharing\\Migration\\Version33000Date20251030081948' => __DIR__ . '/..' . '/../lib/Migration/Version33000Date20251030081948.php',
         'OCA\\Files_Sharing\\MountProvider' => __DIR__ . '/..' . '/../lib/MountProvider.php',
         'OCA\\Files_Sharing\\Notification\\Listener' => __DIR__ . '/..' . '/../lib/Notification/Listener.php',
         'OCA\\Files_Sharing\\Notification\\Notifier' => __DIR__ . '/..' . '/../lib/Notification/Notifier.php',
+        'OCA\\Files_Sharing\\OpenMetrics\\SharesCountMetric' => __DIR__ . '/..' . '/../lib/OpenMetrics/SharesCountMetric.php',
         'OCA\\Files_Sharing\\OrphanHelper' => __DIR__ . '/..' . '/../lib/OrphanHelper.php',
+        'OCA\\Files_Sharing\\Repair\\CleanupShareTarget' => __DIR__ . '/..' . '/../lib/Repair/CleanupShareTarget.php',
         'OCA\\Files_Sharing\\ResponseDefinitions' => __DIR__ . '/..' . '/../lib/ResponseDefinitions.php',
         'OCA\\Files_Sharing\\Scanner' => __DIR__ . '/..' . '/../lib/Scanner.php',
         'OCA\\Files_Sharing\\Settings\\Personal' => __DIR__ . '/..' . '/../lib/Settings/Personal.php',
-        'OCA\\Files_Sharing\\ShareBackend\\File' => __DIR__ . '/..' . '/../lib/ShareBackend/File.php',
-        'OCA\\Files_Sharing\\ShareBackend\\Folder' => __DIR__ . '/..' . '/../lib/ShareBackend/Folder.php',
+        'OCA\\Files_Sharing\\ShareTargetValidator' => __DIR__ . '/..' . '/../lib/ShareTargetValidator.php',
         'OCA\\Files_Sharing\\SharedMount' => __DIR__ . '/..' . '/../lib/SharedMount.php',
         'OCA\\Files_Sharing\\SharedStorage' => __DIR__ . '/..' . '/../lib/SharedStorage.php',
         'OCA\\Files_Sharing\\SharesReminderJob' => __DIR__ . '/..' . '/../lib/SharesReminderJob.php',

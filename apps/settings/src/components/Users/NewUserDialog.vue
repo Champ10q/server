@@ -4,20 +4,23 @@
 -->
 
 <template>
-	<NcDialog class="dialog"
+	<NcDialog
+		class="dialog"
 		size="small"
 		:name="t('settings', 'New account')"
 		out-transition
 		v-on="$listeners">
-		<form id="new-user-form"
+		<form
+			id="new-user-form"
 			class="dialog__form"
 			data-test="form"
 			:disabled="loading.all"
 			@submit.prevent="createUser">
-			<NcTextField ref="username"
+			<NcTextField
+				ref="username"
+				v-model="newUser.id"
 				class="dialog__item"
 				data-test="username"
-				:value.sync="newUser.id"
 				:disabled="settings.newUserGenerateUserID"
 				:label="usernameLabel"
 				autocapitalize="none"
@@ -25,22 +28,25 @@
 				spellcheck="false"
 				pattern="[a-zA-Z0-9 _\.@\-']+"
 				required />
-			<NcTextField class="dialog__item"
+			<NcTextField
+				v-model="newUser.displayName"
+				class="dialog__item"
 				data-test="displayName"
-				:value.sync="newUser.displayName"
 				:label="t('settings', 'Display name')"
 				autocapitalize="none"
 				autocomplete="off"
 				spellcheck="false" />
-			<span v-if="!settings.newUserRequireEmail"
+			<span
+				v-if="!settings.newUserRequireEmail"
 				id="password-email-hint"
 				class="dialog__hint">
 				{{ t('settings', 'Either password or email is required') }}
 			</span>
-			<NcPasswordField ref="password"
+			<NcPasswordField
+				ref="password"
+				v-model="newUser.password"
 				class="dialog__item"
 				data-test="password"
-				:value.sync="newUser.password"
 				:minlength="minPasswordLength"
 				:maxlength="469"
 				aria-describedby="password-email-hint"
@@ -49,10 +55,11 @@
 				autocomplete="new-password"
 				spellcheck="false"
 				:required="newUser.mailAddress === ''" />
-			<NcTextField class="dialog__item"
+			<NcTextField
+				v-model="newUser.mailAddress"
+				class="dialog__item"
 				data-test="email"
 				type="email"
-				:value.sync="newUser.mailAddress"
 				aria-describedby="password-email-hint"
 				:label="newUser.password === '' || settings.newUserRequireEmail ? t('settings', 'Email (required)') : t('settings', 'Email')"
 				autocapitalize="none"
@@ -60,36 +67,44 @@
 				spellcheck="false"
 				:required="newUser.password === '' || settings.newUserRequireEmail" />
 			<div class="dialog__item">
-				<NcSelect class="dialog__select"
+				<NcSelect
+					class="dialog__select"
+					data-test="groups"
 					:input-label="!settings.isAdmin && !settings.isDelegatedAdmin ? t('settings', 'Member of the following groups (required)') : t('settings', 'Member of the following groups')"
 					:placeholder="t('settings', 'Set account groups')"
 					:disabled="loading.groups || loading.all"
-					:options="canAddGroups"
-					:value="newUser.groups"
+					:options="availableGroups"
+					:model-value="newUser.groups"
 					label="name"
-					:close-on-select="false"
+					keep-open
 					:multiple="true"
-					:taggable="true"
+					:taggable="settings.isAdmin || settings.isDelegatedAdmin"
 					:required="!settings.isAdmin && !settings.isDelegatedAdmin"
-					@input="handleGroupInput"
-					@option:created="createGroup" />
+					:create-option="(value) => ({ id: value, name: value, isCreating: true })"
+					@search="searchGroups"
+					@option:created="createGroup"
+					@option:deselected="removeGroup"
+					@option:selected="options => addGroup(options.at(-1))" />
 					<!-- If user is not admin, they are a subadmin.
 						Subadmins can't create users outside their groups
 						Therefore, empty select is forbidden -->
 			</div>
-			<div v-if="subAdminsGroups.length > 0"
-				class="dialog__item">
-				<NcSelect v-model="newUser.subAdminsGroups"
+			<div class="dialog__item">
+				<NcSelect
+					v-model="newUser.subAdminsGroups"
 					class="dialog__select"
 					:input-label="t('settings', 'Admin of the following groups')"
-					:placeholder="t('settings', 'Set account as admin for …')"
-					:options="subAdminsGroups"
-					:close-on-select="false"
+					:placeholder="t('settings', 'Set account as admin for …')"
+					:disabled="loading.groups || loading.all"
+					:options="availableSubAdminGroups"
+					keep-open
 					:multiple="true"
-					label="name" />
+					label="name"
+					@search="searchGroups" />
 			</div>
 			<div class="dialog__item">
-				<NcSelect v-model="newUser.quota"
+				<NcSelect
+					v-model="newUser.quota"
 					class="dialog__select"
 					:input-label="t('settings', 'Quota')"
 					:placeholder="t('settings', 'Set account quota')"
@@ -98,9 +113,11 @@
 					:taggable="true"
 					:create-option="validateQuota" />
 			</div>
-			<div v-if="showConfig.showLanguages"
+			<div
+				v-if="showConfig.showLanguages"
 				class="dialog__item">
-				<NcSelect v-model="newUser.language"
+				<NcSelect
+					v-model="newUser.language"
 					class="dialog__select"
 					:input-label="t('settings', 'Language')"
 					:placeholder="t('settings', 'Set default language')"
@@ -110,8 +127,9 @@
 					:options="languages"
 					label="name" />
 			</div>
-			<div :class="['dialog__item dialog__managers', { 'icon-loading-small': loading.manager }]">
-				<NcSelect v-model="newUser.manager"
+			<div class="dialog__item dialog__managers" :class="[{ 'icon-loading-small': loading.manager }]">
+				<NcSelect
+					v-model="newUser.manager"
 					class="dialog__select"
 					:input-label="managerInputLabel"
 					:placeholder="managerLabel"
@@ -123,11 +141,12 @@
 		</form>
 
 		<template #actions>
-			<NcButton class="dialog__submit"
+			<NcButton
+				class="dialog__submit"
 				data-test="submit"
 				form="new-user-form"
-				type="primary"
-				native-type="submit">
+				variant="primary"
+				type="submit">
 				{{ t('settings', 'Add new account') }}
 			</NcButton>
 		</template>
@@ -136,11 +155,13 @@
 
 <script>
 import { formatFileSize, parseFileSize } from '@nextcloud/files'
-import NcButton from '@nextcloud/vue/dist/Components/NcButton.js'
-import NcDialog from '@nextcloud/vue/dist/Components/NcDialog.js'
-import NcPasswordField from '@nextcloud/vue/dist/Components/NcPasswordField.js'
-import NcSelect from '@nextcloud/vue/dist/Components/NcSelect.js'
-import NcTextField from '@nextcloud/vue/dist/Components/NcTextField.js'
+import NcButton from '@nextcloud/vue/components/NcButton'
+import NcDialog from '@nextcloud/vue/components/NcDialog'
+import NcPasswordField from '@nextcloud/vue/components/NcPasswordField'
+import NcSelect from '@nextcloud/vue/components/NcSelect'
+import NcTextField from '@nextcloud/vue/components/NcTextField'
+import logger from '../../logger.ts'
+import { searchGroups } from '../../service/groups.ts'
 
 export default {
 	name: 'NewUserDialog',
@@ -177,6 +198,8 @@ export default {
 			managerInputLabel: t('settings', 'Manager'),
 			// TRANSLATORS This string describes a manager in the context of an organization
 			managerLabel: t('settings', 'Set line manager'),
+			// Cancelable promise for search groups request
+			promise: null,
 		}
 	},
 
@@ -200,27 +223,16 @@ export default {
 			return this.$store.getters.getPasswordPolicyMinLength
 		},
 
-		groups() {
-			// data provided php side + remove the recent and disabled groups
-			return this.$store.getters.getGroups
-				.filter(group => group.id !== '__nc_internal_recent' && group.id !== 'disabled')
-				.sort((a, b) => a.name.localeCompare(b.name))
+		availableGroups() {
+			const groups = (this.settings.isAdmin || this.settings.isDelegatedAdmin)
+				? this.$store.getters.getSortedGroups
+				: this.$store.getters.getSubAdminGroups
+
+			return groups.filter((group) => group.id !== '__nc_internal_recent' && group.id !== 'disabled')
 		},
 
-		subAdminsGroups() {
-			// data provided php side
-			return this.$store.getters.getSubadminGroups
-		},
-
-		canAddGroups() {
-			// disabled if no permission to add new users to group
-			return this.groups.map(group => {
-				// clone object because we don't want
-				// to edit the original groups
-				group = Object.assign({}, group)
-				group.$isDisabled = group.canAdd === false
-				return group
-			})
+		availableSubAdminGroups() {
+			return this.availableGroups.filter((group) => group.id !== 'admin')
 		},
 
 		languages() {
@@ -256,8 +268,8 @@ export default {
 					password: this.newUser.password,
 					displayName: this.newUser.displayName,
 					email: this.newUser.mailAddress,
-					groups: this.newUser.groups.map(group => group.id),
-					subadmin: this.newUser.subAdminsGroups.map(group => group.id),
+					groups: this.newUser.groups.map((group) => group.id),
+					subadmin: this.newUser.subAdminsGroups.map((group) => group.id),
 					quota: this.newUser.quota.id,
 					language: this.newUser.language.code,
 					manager: this.newUser.manager.id,
@@ -281,13 +293,32 @@ export default {
 			}
 		},
 
-		handleGroupInput(groups) {
-			/**
-			 * Filter out groups with no id to prevent duplicate selected options
-			 *
-			 * Created groups are added programmatically by `createGroup()`
-			 */
-			 this.newUser.groups = groups.filter(group => Boolean(group.id))
+		async searchGroups(query, toggleLoading) {
+			if (!this.settings.isAdmin && !this.settings.isDelegatedAdmin) {
+				// managers cannot search for groups
+				return
+			}
+
+			if (this.promise) {
+				this.promise.cancel()
+			}
+			toggleLoading(true)
+			try {
+				this.promise = searchGroups({
+					search: query,
+					offset: 0,
+					limit: 25,
+				})
+				const groups = await this.promise
+				// Populate store from server request
+				for (const group of groups) {
+					this.$store.commit('addGroup', group)
+				}
+			} catch (error) {
+				logger.error(t('settings', 'Failed to search groups'), { error })
+			}
+			this.promise = null
+			toggleLoading(false)
 		},
 
 		/**
@@ -300,11 +331,38 @@ export default {
 			this.loading.groups = true
 			try {
 				await this.$store.dispatch('addGroup', gid)
-				this.newUser.groups.push(this.groups.find(group => group.id === gid))
-				this.loading.groups = false
+				this.newUser.groups.push({ id: gid, name: gid })
 			} catch (error) {
-				this.loading.groups = false
+				logger.error(t('settings', 'Failed to create group'), { error })
 			}
+			this.loading.groups = false
+		},
+
+		/**
+		 * Add user to group
+		 *
+		 * @param {object} group Group object
+		 */
+		async addGroup(group) {
+			if (group.isCreating) {
+				return
+			}
+			if (group.canAdd === false) {
+				return
+			}
+			this.newUser.groups.push(group)
+		},
+
+		/**
+		 * Remove user from group
+		 *
+		 * @param {object} group Group object
+		 */
+		removeGroup(group) {
+			if (group.canRemove === false) {
+				return
+			}
+			this.newUser.groups = this.newUser.groups.filter((g) => g.id !== group.id)
 		},
 
 		/**
@@ -318,7 +376,7 @@ export default {
 			const validQuota = OC.Util.computerFileSize(quota)
 			if (validQuota !== null && validQuota >= 0) {
 				// unify format output
-				quota = formatFileSize(parseFileSize(quota))
+				quota = formatFileSize(parseFileSize(quota, true))
 				this.newUser.quota = { id: quota, label: quota }
 				return this.newUser.quota
 			}
@@ -330,9 +388,7 @@ export default {
 		languageFilterBy(option, label, search) {
 			// Show group header of the language
 			if (option.languages) {
-				return option.languages.some(
-					({ name }) => name.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
-				)
+				return option.languages.some(({ name }) => name.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
 			}
 
 			return (label || '').toLocaleLowerCase().includes(search.toLocaleLowerCase())
@@ -346,7 +402,7 @@ export default {
 					limit: 10,
 					search: query,
 				},
-			).then(response => {
+			).then((response) => {
 				const users = response?.data ? Object.values(response?.data.ocs.data.users) : []
 				if (users.length > 0) {
 					this.possibleManagers = users

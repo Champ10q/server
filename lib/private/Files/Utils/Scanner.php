@@ -9,6 +9,7 @@ namespace OC\Files\Utils;
 
 use OC\Files\Cache\Cache;
 use OC\Files\Filesystem;
+use OC\Files\Mount\MountPoint;
 use OC\Files\Storage\FailedStorage;
 use OC\Files\Storage\Home;
 use OC\ForbiddenException;
@@ -29,6 +30,8 @@ use OCP\Files\Storage\IStorage;
 use OCP\Files\StorageNotAvailableException;
 use OCP\IDBConnection;
 use OCP\Lock\ILockingProvider;
+use OCP\Lock\LockedException;
+use OCP\Server;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -43,43 +46,24 @@ use Psr\Log\LoggerInterface;
 class Scanner extends PublicEmitter {
 	public const MAX_ENTRIES_TO_COMMIT = 10000;
 
-	/** @var string $user */
-	private $user;
-
-	/** @var IDBConnection */
-	protected $db;
-
-	/** @var IEventDispatcher */
-	private $dispatcher;
-
-	protected LoggerInterface $logger;
-
 	/**
 	 * Whether to use a DB transaction
-	 *
-	 * @var bool
 	 */
-	protected $useTransaction;
+	protected bool $useTransaction;
 
 	/**
 	 * Number of entries scanned to commit
-	 *
-	 * @var int
 	 */
-	protected $entriesToCommit;
+	protected int $entriesToCommit = 0;
 
-	/**
-	 * @param string $user
-	 * @param IDBConnection|null $db
-	 * @param IEventDispatcher $dispatcher
-	 */
-	public function __construct($user, $db, IEventDispatcher $dispatcher, LoggerInterface $logger) {
-		$this->user = $user;
-		$this->db = $db;
-		$this->dispatcher = $dispatcher;
-		$this->logger = $logger;
+	public function __construct(
+		private ?string $user,
+		protected ?IDBConnection $db,
+		private IEventDispatcher $dispatcher,
+		protected LoggerInterface $logger,
+	) {
 		// when DB locking is used, no DB transactions will be used
-		$this->useTransaction = !(\OC::$server->get(ILockingProvider::class) instanceof DBLockingProvider);
+		$this->useTransaction = !(Server::get(ILockingProvider::class) instanceof DBLockingProvider);
 	}
 
 	/**
@@ -105,28 +89,28 @@ class Scanner extends PublicEmitter {
 	/**
 	 * attach listeners to the scanner
 	 *
-	 * @param \OC\Files\Mount\MountPoint $mount
+	 * @param MountPoint $mount
 	 */
 	protected function attachListener($mount) {
 		/** @var \OC\Files\Cache\Scanner $scanner */
 		$scanner = $mount->getStorage()->getScanner();
-		$scanner->listen('\OC\Files\Cache\Scanner', 'scanFile', function ($path) use ($mount) {
+		$scanner->listen('\OC\Files\Cache\Scanner', 'scanFile', function ($path) use ($mount): void {
 			$this->emit('\OC\Files\Utils\Scanner', 'scanFile', [$mount->getMountPoint() . $path]);
 			$this->dispatcher->dispatchTyped(new BeforeFileScannedEvent($mount->getMountPoint() . $path));
 		});
-		$scanner->listen('\OC\Files\Cache\Scanner', 'scanFolder', function ($path) use ($mount) {
+		$scanner->listen('\OC\Files\Cache\Scanner', 'scanFolder', function ($path) use ($mount): void {
 			$this->emit('\OC\Files\Utils\Scanner', 'scanFolder', [$mount->getMountPoint() . $path]);
 			$this->dispatcher->dispatchTyped(new BeforeFolderScannedEvent($mount->getMountPoint() . $path));
 		});
-		$scanner->listen('\OC\Files\Cache\Scanner', 'postScanFile', function ($path) use ($mount) {
+		$scanner->listen('\OC\Files\Cache\Scanner', 'postScanFile', function ($path) use ($mount): void {
 			$this->emit('\OC\Files\Utils\Scanner', 'postScanFile', [$mount->getMountPoint() . $path]);
 			$this->dispatcher->dispatchTyped(new FileScannedEvent($mount->getMountPoint() . $path));
 		});
-		$scanner->listen('\OC\Files\Cache\Scanner', 'postScanFolder', function ($path) use ($mount) {
+		$scanner->listen('\OC\Files\Cache\Scanner', 'postScanFolder', function ($path) use ($mount): void {
 			$this->emit('\OC\Files\Utils\Scanner', 'postScanFolder', [$mount->getMountPoint() . $path]);
 			$this->dispatcher->dispatchTyped(new FolderScannedEvent($mount->getMountPoint() . $path));
 		});
-		$scanner->listen('\OC\Files\Cache\Scanner', 'normalizedNameMismatch', function ($path) use ($mount) {
+		$scanner->listen('\OC\Files\Cache\Scanner', 'normalizedNameMismatch', function ($path) use ($mount): void {
 			$this->emit('\OC\Files\Utils\Scanner', 'normalizedNameMismatch', [$path]);
 		});
 	}
@@ -152,13 +136,13 @@ class Scanner extends PublicEmitter {
 				$scanner = $storage->getScanner();
 				$this->attachListener($mount);
 
-				$scanner->listen('\OC\Files\Cache\Scanner', 'removeFromCache', function ($path) use ($storage) {
+				$scanner->listen('\OC\Files\Cache\Scanner', 'removeFromCache', function ($path) use ($storage): void {
 					$this->triggerPropagator($storage, $path);
 				});
-				$scanner->listen('\OC\Files\Cache\Scanner', 'updateCache', function ($path) use ($storage) {
+				$scanner->listen('\OC\Files\Cache\Scanner', 'updateCache', function ($path) use ($storage): void {
 					$this->triggerPropagator($storage, $path);
 				});
-				$scanner->listen('\OC\Files\Cache\Scanner', 'addToCache', function ($path) use ($storage) {
+				$scanner->listen('\OC\Files\Cache\Scanner', 'addToCache', function ($path) use ($storage): void {
 					$this->triggerPropagator($storage, $path);
 				});
 
@@ -204,7 +188,10 @@ class Scanner extends PublicEmitter {
 				foreach (['', 'files'] as $path) {
 					if (!$storage->isCreatable($path)) {
 						$fullPath = $storage->getSourcePath($path);
-						if (!$storage->is_dir($path) && $storage->getCache()->inCache($path)) {
+						if (isset($mounts[$mount->getMountPoint() . $path . '/'])) {
+							// /<user>/files is overwritten by a mountpoint, so this check is irrelevant
+							break;
+						} elseif (!$storage->is_dir($path) && $storage->getCache()->inCache($path)) {
 							throw new NotFoundException("User folder $fullPath exists in cache but not on disk");
 						} elseif ($storage->is_dir($path)) {
 							$ownerUid = fileowner($fullPath);
@@ -212,9 +199,6 @@ class Scanner extends PublicEmitter {
 							$owner = $owner['name'] ?? $ownerUid;
 							$permissions = decoct(fileperms($fullPath));
 							throw new ForbiddenException("User folder $fullPath is not writable, folders is owned by $owner and has mode $permissions");
-						} elseif (isset($mounts[$mount->getMountPoint() . $path . '/'])) {
-							// /<user>/files is overwritten by a mountpoint, so this check is irrelevant
-							break;
 						} else {
 							// if the root exists in neither the cache nor the storage the user isn't setup yet
 							break 2;
@@ -233,15 +217,15 @@ class Scanner extends PublicEmitter {
 			$scanner->setUseTransactions(false);
 			$this->attachListener($mount);
 
-			$scanner->listen('\OC\Files\Cache\Scanner', 'removeFromCache', function ($path) use ($storage) {
+			$scanner->listen('\OC\Files\Cache\Scanner', 'removeFromCache', function ($path) use ($storage): void {
 				$this->postProcessEntry($storage, $path);
 				$this->dispatcher->dispatchTyped(new NodeRemovedFromCache($storage, $path));
 			});
-			$scanner->listen('\OC\Files\Cache\Scanner', 'updateCache', function ($path) use ($storage) {
+			$scanner->listen('\OC\Files\Cache\Scanner', 'updateCache', function ($path) use ($storage): void {
 				$this->postProcessEntry($storage, $path);
 				$this->dispatcher->dispatchTyped(new FileCacheUpdated($storage, $path));
 			});
-			$scanner->listen('\OC\Files\Cache\Scanner', 'addToCache', function ($path, $storageId, $data, $fileId) use ($storage) {
+			$scanner->listen('\OC\Files\Cache\Scanner', 'addToCache', function ($path, $storageId, $data, $fileId) use ($storage): void {
 				$this->postProcessEntry($storage, $path);
 				if ($fileId) {
 					$this->dispatcher->dispatchTyped(new FileCacheUpdated($storage, $path));
@@ -260,7 +244,15 @@ class Scanner extends PublicEmitter {
 			try {
 				$propagator = $storage->getPropagator();
 				$propagator->beginBatch();
-				$scanner->scan($relativePath, $recursive, \OC\Files\Cache\Scanner::REUSE_ETAG | \OC\Files\Cache\Scanner::REUSE_SIZE);
+				try {
+					$scanner->scan($relativePath, $recursive, \OC\Files\Cache\Scanner::REUSE_ETAG | \OC\Files\Cache\Scanner::REUSE_SIZE);
+				} catch (LockedException $e) {
+					if (is_string($e->getReadablePath()) && str_starts_with($e->getReadablePath(), 'scanner::')) {
+						throw new LockedException("scanner::$dir", $e, $e->getExistingLock());
+					} else {
+						throw $e;
+					}
+				}
 				$cache = $storage->getCache();
 				if ($cache instanceof Cache) {
 					// only re-calculate for the root folder we scanned, anything below that is taken care of by the scanner

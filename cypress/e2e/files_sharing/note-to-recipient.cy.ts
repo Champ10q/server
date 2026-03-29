@@ -2,9 +2,10 @@
  * SPDX-FileCopyrightText: 2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import type { User } from '@nextcloud/cypress'
+import type { User } from '@nextcloud/e2e-test-server/cypress'
+
+import { navigateToFolder } from '../files/FilesUtils.ts'
 import { createShare, openSharingPanel } from './FilesSharingUtils.ts'
-import { getRowForFile, navigateToFolder } from '../files/FilesUtils.ts'
 
 describe('files_sharing: Note to recipient', { testIsolation: true }, () => {
 	let user: User
@@ -40,6 +41,26 @@ describe('files_sharing: Note to recipient', { testIsolation: true }, () => {
 			.and('contain.text', 'Hello, this is the note.')
 	})
 
+	it('displays the note to the sharee even if the file list is empty', () => {
+		cy.mkdir(user, '/folder')
+		cy.login(user)
+		cy.visit('/apps/files')
+
+		// share the folder
+		createShare('folder', sharee.userId, { read: true, download: true, note: 'Hello, this is the note.' })
+
+		cy.logout()
+		// Now for the sharee
+		cy.login(sharee)
+
+		// visit shared files view
+		cy.visit('/apps/files')
+		navigateToFolder('folder')
+		cy.get('.note-to-recipient')
+			.should('be.visible')
+			.and('contain.text', 'Hello, this is the note.')
+	})
+
 	/**
 	 * Regression test for https://github.com/nextcloud/server/issues/46188
 	 */
@@ -52,16 +73,14 @@ describe('files_sharing: Note to recipient', { testIsolation: true }, () => {
 		createShare('folder', sharee.userId, { read: true, download: true, note: 'Hello, this is the note.' })
 
 		// reload just to be sure
-		cy.reload()
+		cy.visit('/apps/files')
 
 		// open the sharing tab
 		openSharingPanel('folder')
 
 		cy.get('[data-cy-sidebar]').within(() => {
 			// Open the share
-			cy.get('[data-cy-files-sharing-share-actions]').first().click()
-			// Open the custom settings
-			cy.get('[data-cy-files-sharing-share-permissions-bundle="custom"]').click()
+			cy.get('[data-cy-files-sharing-share-actions]').first().click({ force: true })
 
 			cy.findByRole('checkbox', { name: /note to recipient/i })
 				.and('be.checked')

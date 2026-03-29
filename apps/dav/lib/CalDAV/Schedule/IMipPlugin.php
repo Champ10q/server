@@ -14,6 +14,7 @@ use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\Defaults;
 use OCP\IAppConfig;
 use OCP\IUserSession;
+use OCP\Mail\IEmailValidator;
 use OCP\Mail\IMailer;
 use OCP\Mail\Provider\Address;
 use OCP\Mail\Provider\Attachment;
@@ -45,7 +46,7 @@ use Sabre\VObject\Reader;
  * @license http://sabre.io/license/ Modified BSD License
  */
 class IMipPlugin extends SabreIMipPlugin {
-	
+
 	private ?VCalendar $vCalendar = null;
 	public const MAX_DATE = '2038-01-01';
 	public const METHOD_REQUEST = 'request';
@@ -63,6 +64,7 @@ class IMipPlugin extends SabreIMipPlugin {
 		private IMipService $imipService,
 		private EventComparisonService $eventComparisonService,
 		private IMailManager $mailManager,
+		private IEmailValidator $emailValidator,
 	) {
 		parent::__construct('');
 	}
@@ -119,11 +121,23 @@ class IMipPlugin extends SabreIMipPlugin {
 
 		// Strip off mailto:
 		$recipient = substr($iTipMessage->recipient, 7);
-		if (!$this->mailer->validateMailAddress($recipient)) {
+		if (!$this->emailValidator->isValid($recipient)) {
 			// Nothing to send if the recipient doesn't have a valid email address
 			$iTipMessage->scheduleStatus = '5.0; EMail delivery failed';
 			return;
 		}
+
+		// Check if external attendees are disabled
+		$externalAttendeesDisabled = $this->config->getValueBool('dav', 'caldav_external_attendees_disabled', false);
+		if ($externalAttendeesDisabled && !$this->imipService->isSystemUser($recipient)) {
+			$this->logger->debug('Invitation not sent to external attendee (external attendees disabled)', [
+				'uid' => $iTipMessage->uid,
+				'attendee' => $recipient,
+			]);
+			$iTipMessage->scheduleStatus = '5.0; External attendees are disabled';
+			return;
+		}
+
 		$recipientName = $iTipMessage->recipientName ? (string)$iTipMessage->recipientName : null;
 
 		$newEvents = $iTipMessage->message;
@@ -156,15 +170,16 @@ class IMipPlugin extends SabreIMipPlugin {
 			$iTipMessage->scheduleStatus = '5.0; EMail delivery failed';
 			return;
 		}
-		// Don't send emails to things
-		if ($this->imipService->isRoomOrResource($attendee)) {
-			$this->logger->debug('No invitation sent as recipient is room or resource', [
+		// Don't send emails to rooms, resources and circles
+		if ($this->imipService->isRoomOrResource($attendee)
+				|| $this->imipService->isCircle($attendee)) {
+			$this->logger->debug('No invitation sent as recipient is room, resource or circle', [
 				'attendee' => $recipient,
 			]);
 			$iTipMessage->scheduleStatus = '1.0;We got the message, but it\'s not significant enough to warrant an email';
 			return;
 		}
-		$this->imipService->setL10n($attendee);
+		$this->imipService->setL10nFromAttendee($attendee);
 
 		// Build the sender name.
 		// Due to a bug in sabre, the senderName property for an iTIP message can actually also be a VObject Property
@@ -185,7 +200,7 @@ class IMipPlugin extends SabreIMipPlugin {
 		switch (strtolower($iTipMessage->method)) {
 			case self::METHOD_REPLY:
 				$method = self::METHOD_REPLY;
-				$data = $this->imipService->buildBodyData($vEvent, $oldVevent);
+				$data = $this->imipService->buildReplyBodyData($vEvent);
 				$replyingAttendee = $this->imipService->getReplyingAttendee($iTipMessage);
 				break;
 			case self::METHOD_CANCEL:
@@ -248,7 +263,6 @@ class IMipPlugin extends SabreIMipPlugin {
 		// convert iTip Message to string
 		$itip_msg = $iTipMessage->message->serialize();
 
-		$user = null;
 		$mailService = null;
 
 		try {
@@ -260,8 +274,14 @@ class IMipPlugin extends SabreIMipPlugin {
 					$mailService = $this->mailManager->findServiceByAddress($user->getUID(), $sender);
 				}
 			}
+
+			// The display name in Nextcloud can use utf-8.
+			// As the default charset for text/* is us-ascii, it's important to explicitly define it.
+			// See https://www.rfc-editor.org/rfc/rfc6047.html#section-2.4.
+			$contentType = 'text/calendar; method=' . $iTipMessage->method . '; charset="utf-8"';
+
 			// evaluate if a mail service was found and has sending capabilities
-			if ($mailService !== null && $mailService instanceof IMessageSend) {
+			if ($mailService instanceof IMessageSend) {
 				// construct mail message and set required parameters
 				$message = $mailService->initiateMessage();
 				$message->setFrom(
@@ -273,10 +293,12 @@ class IMipPlugin extends SabreIMipPlugin {
 				$message->setSubject($template->renderSubject());
 				$message->setBodyPlain($template->renderText());
 				$message->setBodyHtml($template->renderHtml());
+				// Adding name=event.ics is a trick to make the invitation also appear
+				// as a file attachment in mail clients like Thunderbird or Evolution.
 				$message->setAttachments((new Attachment(
 					$itip_msg,
-					'event.ics',
-					'text/calendar; method=' . $iTipMessage->method,
+					null,
+					$contentType . '; name=event.ics',
 					true
 				)));
 				// send message
@@ -292,10 +314,12 @@ class IMipPlugin extends SabreIMipPlugin {
 					(($senderName !== null) ? [$sender => $senderName] : [$sender])
 				);
 				$message->useTemplate($template);
+				// Using a different content type because Symfony Mailer/Mime will append the name to
+				// the content type header and attachInline does not allow null.
 				$message->attachInline(
 					$itip_msg,
 					'event.ics',
-					'text/calendar; method=' . $iTipMessage->method
+					$contentType,
 				);
 				$failed = $this->mailer->send($message);
 			}

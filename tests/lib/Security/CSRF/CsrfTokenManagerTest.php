@@ -10,12 +10,17 @@ declare(strict_types=1);
 
 namespace Test\Security\CSRF;
 
+use OC\Security\CSRF\CsrfToken;
+use OC\Security\CSRF\CsrfTokenGenerator;
+use OC\Security\CSRF\CsrfTokenManager;
+use OC\Security\CSRF\TokenStorage\SessionStorage;
+
 class CsrfTokenManagerTest extends \Test\TestCase {
-	/** @var \OC\Security\CSRF\CsrfTokenManager */
+	/** @var CsrfTokenManager */
 	private $csrfTokenManager;
-	/** @var \OC\Security\CSRF\CsrfTokenGenerator */
+	/** @var CsrfTokenGenerator */
 	private $tokenGenerator;
-	/** @var \OC\Security\CSRF\TokenStorage\SessionStorage */
+	/** @var SessionStorage */
 	private $storageInterface;
 
 	protected function setUp(): void {
@@ -25,7 +30,7 @@ class CsrfTokenManagerTest extends \Test\TestCase {
 		$this->storageInterface = $this->getMockBuilder('\OC\Security\CSRF\TokenStorage\SessionStorage')
 			->disableOriginalConstructor()->getMock();
 
-		$this->csrfTokenManager = new \OC\Security\CSRF\CsrfTokenManager(
+		$this->csrfTokenManager = new CsrfTokenManager(
 			$this->tokenGenerator,
 			$this->storageInterface
 		);
@@ -41,7 +46,7 @@ class CsrfTokenManagerTest extends \Test\TestCase {
 			->method('getToken')
 			->willReturn('MyExistingToken');
 
-		$expected = new \OC\Security\CSRF\CsrfToken('MyExistingToken');
+		$expected = new CsrfToken('MyExistingToken');
 		$this->assertEquals($expected, $this->csrfTokenManager->getToken());
 	}
 
@@ -55,7 +60,7 @@ class CsrfTokenManagerTest extends \Test\TestCase {
 			->method('getToken')
 			->willReturn('MyExistingToken');
 
-		$expected = new \OC\Security\CSRF\CsrfToken('MyExistingToken');
+		$expected = new CsrfToken('MyExistingToken');
 		$token = $this->csrfTokenManager->getToken();
 		$this->assertSame($token, $this->csrfTokenManager->getToken());
 		$this->assertSame($token, $this->csrfTokenManager->getToken());
@@ -75,7 +80,7 @@ class CsrfTokenManagerTest extends \Test\TestCase {
 			->method('setToken')
 			->with('MyNewToken');
 
-		$expected = new \OC\Security\CSRF\CsrfToken('MyNewToken');
+		$expected = new CsrfToken('MyNewToken');
 		$this->assertEquals($expected, $this->csrfTokenManager->getToken());
 	}
 
@@ -89,7 +94,7 @@ class CsrfTokenManagerTest extends \Test\TestCase {
 			->method('setToken')
 			->with('MyNewToken');
 
-		$expected = new \OC\Security\CSRF\CsrfToken('MyNewToken');
+		$expected = new CsrfToken('MyNewToken');
 		$this->assertEquals($expected, $this->csrfTokenManager->refreshToken());
 	}
 
@@ -106,7 +111,7 @@ class CsrfTokenManagerTest extends \Test\TestCase {
 			->expects($this->once())
 			->method('hasToken')
 			->willReturn(false);
-		$token = new \OC\Security\CSRF\CsrfToken('Token');
+		$token = new CsrfToken('Token');
 
 		$this->assertSame(false, $this->csrfTokenManager->isTokenValid($token));
 	}
@@ -116,7 +121,7 @@ class CsrfTokenManagerTest extends \Test\TestCase {
 			->expects($this->once())
 			->method('hasToken')
 			->willReturn(true);
-		$token = new \OC\Security\CSRF\CsrfToken('Token');
+		$token = new CsrfToken('Token');
 		$this->storageInterface
 			->expects($this->once())
 			->method('getToken')
@@ -134,7 +139,7 @@ class CsrfTokenManagerTest extends \Test\TestCase {
 			->expects($this->once())
 			->method('hasToken')
 			->willReturn(true);
-		$token = new \OC\Security\CSRF\CsrfToken($tokenVal);
+		$token = new CsrfToken($tokenVal);
 		$this->storageInterface
 			->expects($this->once())
 			->method('getToken')

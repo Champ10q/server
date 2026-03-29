@@ -8,15 +8,15 @@ declare(strict_types=1);
 
 namespace OC\DB\QueryBuilder;
 
-use OC\DB\Exceptions\DbalException;
 use OCP\DB\IResult;
+use OCP\DB\QueryBuilder\ConflictResolutionMode;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 
 /**
  * Base class for creating classes that extend the builtin query builder
  */
-abstract class ExtendedQueryBuilder implements IQueryBuilder {
+abstract class ExtendedQueryBuilder extends TypedQueryBuilder {
 	public function __construct(
 		protected IQueryBuilder $builder,
 	) {
@@ -45,21 +45,6 @@ abstract class ExtendedQueryBuilder implements IQueryBuilder {
 
 	public function getState() {
 		return $this->builder->getState();
-	}
-
-	public function execute(?IDBConnection $connection = null) {
-		try {
-			if ($this->getType() === \Doctrine\DBAL\Query\QueryBuilder::SELECT) {
-				return $this->executeQuery($connection);
-			} else {
-				return $this->executeStatement($connection);
-			}
-		} catch (DBALException $e) {
-			// `IQueryBuilder->execute` never wrapped the exception, but `executeQuery` and `executeStatement` do
-			/** @var \Doctrine\DBAL\Exception $previous */
-			$previous = $e->getPrevious();
-			throw $previous;
-		}
 	}
 
 	public function getSQL() {
@@ -115,7 +100,7 @@ abstract class ExtendedQueryBuilder implements IQueryBuilder {
 		return $this;
 	}
 
-	public function selectAlias($select, $alias) {
+	public function selectAlias($select, $alias): self {
 		$this->builder->selectAlias($select, $alias);
 		return $this;
 	}
@@ -305,5 +290,10 @@ abstract class ExtendedQueryBuilder implements IQueryBuilder {
 
 	public function prefixTableName(string $table): string {
 		return $this->builder->prefixTableName($table);
+	}
+
+	public function forUpdate(ConflictResolutionMode $conflictResolutionMode = ConflictResolutionMode::Ordinary): self {
+		$this->builder->forUpdate($conflictResolutionMode);
+		return $this;
 	}
 }

@@ -2,10 +2,10 @@
  * SPDX-FileCopyrightText: 2022 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-// eslint-disable-next-line n/no-extraneous-import
+
+import { addCommands, User } from '@nextcloud/e2e-test-server/cypress'
+import { basename } from '@nextcloud/paths'
 import axios from 'axios'
-import { addCommands, User } from '@nextcloud/cypress'
-import { basename } from 'path'
 
 // Add custom commands
 import '@testing-library/cypress/add-commands'
@@ -18,7 +18,7 @@ Cypress.env('baseUrl', url)
 
 /**
  * Enable or disable a user
- * TODO: standardize in @nextcloud/cypress
+ * TODO: standardize in `@nextcloud/e2e-test-server`
  *
  * @param {User} user the user to dis- / enable
  * @param {boolean} enable True if the user should be enable, false to disable
@@ -45,7 +45,7 @@ Cypress.Commands.add('enableUser', (user: User, enable = true) => {
 
 /**
  * cy.uploadedFile - uploads a file from the fixtures folder
- * TODO: standardize in @nextcloud/cypress
+ * TODO: standardize in `@nextcloud/e2e-test-server`
  *
  * @param {User} user the owner of the file, e.g. admin
  * @param {string} fixture the fixture file name, e.g. image1.jpg
@@ -54,16 +54,15 @@ Cypress.Commands.add('enableUser', (user: User, enable = true) => {
  */
 Cypress.Commands.add('uploadFile', (user, fixture = 'image.jpg', mimeType = 'image/jpeg', target = `/${fixture}`) => {
 	// get fixture
-	return cy.fixture(fixture, 'base64').then(async file => {
-		// convert the base64 string to a blob
-		const blob = Cypress.Blob.base64StringToBlob(file, mimeType)
-
-		cy.uploadContent(user, blob, mimeType, target)
-	})
+	return cy.fixture(fixture, 'base64')
+		.then((file) => (
+			// convert the base64 string to a blob
+			Cypress.Blob.base64StringToBlob(file, mimeType)
+		))
+		.then((blob) => cy.uploadContent(user, blob, mimeType, target))
 })
 
 Cypress.Commands.add('setFileAsFavorite', (user: User, target: string, favorite = true) => {
-	// eslint-disable-next-line cypress/unsafe-to-chain-command
 	cy.clearAllCookies()
 		.then(async () => {
 			try {
@@ -97,8 +96,7 @@ Cypress.Commands.add('setFileAsFavorite', (user: User, target: string, favorite 
 })
 
 Cypress.Commands.add('mkdir', (user: User, target: string) => {
-	// eslint-disable-next-line cypress/unsafe-to-chain-command
-	cy.clearCookies()
+	return cy.clearCookies()
 		.then(async () => {
 			try {
 				const rootPath = `${Cypress.env('baseUrl')}/remote.php/dav/files/${encodeURIComponent(user.userId)}`
@@ -112,6 +110,7 @@ Cypress.Commands.add('mkdir', (user: User, target: string) => {
 					},
 				})
 				cy.log(`Created directory ${target}`, response)
+				return response
 			} catch (error) {
 				cy.log('error', error)
 				throw new Error('Unable to create directory')
@@ -119,9 +118,31 @@ Cypress.Commands.add('mkdir', (user: User, target: string) => {
 		})
 })
 
+Cypress.Commands.add('rm', (user: User, target: string) => {
+	cy.clearCookies()
+		.then(async () => {
+			try {
+				const rootPath = `${Cypress.env('baseUrl')}/remote.php/dav/files/${encodeURIComponent(user.userId)}`
+				const filePath = target.split('/').map(encodeURIComponent).join('/')
+				const response = await axios({
+					url: `${rootPath}${filePath}`,
+					method: 'DELETE',
+					auth: {
+						username: user.userId,
+						password: user.password,
+					},
+				})
+				cy.log(`delete file or directory ${target}`, response)
+			} catch (error) {
+				cy.log('error', error)
+				throw new Error('Unable to delete file or directory')
+			}
+		})
+})
+
 /**
  * cy.uploadedContent - uploads a raw content
- * TODO: standardize in @nextcloud/cypress
+ * TODO: standardize in `@nextcloud/e2e-test-server`
  *
  * @param {User} user the owner of the file, e.g. admin
  * @param {Blob} blob the content to upload
@@ -221,4 +242,14 @@ Cypress.Commands.add('userFileExists', (user: string, path: string) => {
 	path.replaceAll('"', '\\"').replaceAll(/^\/+/gm, '')
 	return cy.runCommand(`stat --printf="%s" "data/${user}/files/${path}"`, { failOnNonZeroExit: true })
 		.then((exec) => Number.parseInt(exec.stdout || '0'))
+})
+
+Cypress.Commands.add('runOccCommand', (command: string, options?: Partial<Cypress.ExecOptions>) => {
+	return cy.runCommand(`php ./occ ${command}`, options)
+		.then((context) => {
+			// OCC cannot clear the APCu cache
+			return cy.wait(command.startsWith('app:') || command.startsWith('config:')
+				? 3000 // clear APCu cache
+				: 0).then(() => context)
+		})
 })

@@ -1,12 +1,18 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
  * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files_Sharing\Tests\Controller;
 
+use OC\Files\Storage\Wrapper\Wrapper;
+use OCA\Federation\TrustedServers;
 use OCA\Files_Sharing\Controller\ShareAPIController;
+use OCA\Files_Sharing\External\Storage;
+use OCA\Files_Sharing\SharedStorage;
 use OCP\App\IAppManager;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\OCS\OCSBadRequestException;
@@ -14,6 +20,7 @@ use OCP\AppFramework\OCS\OCSException;
 use OCP\AppFramework\OCS\OCSForbiddenException;
 use OCP\AppFramework\OCS\OCSNotFoundException;
 use OCP\Constants;
+use OCP\Files\Cache\ICache;
 use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
@@ -21,6 +28,7 @@ use OCP\Files\Mount\IMountPoint;
 use OCP\Files\Mount\IShareOwnerlessMount;
 use OCP\Files\NotFoundException;
 use OCP\Files\Storage\IStorage;
+use OCP\IAppConfig;
 use OCP\IConfig;
 use OCP\IDateTimeZone;
 use OCP\IGroup;
@@ -28,12 +36,15 @@ use OCP\IGroupManager;
 use OCP\IL10N;
 use OCP\IPreview;
 use OCP\IRequest;
+use OCP\ITagManager;
+use OCP\ITags;
 use OCP\IURLGenerator;
 use OCP\IUser;
 use OCP\IUserManager;
 use OCP\Lock\ILockingProvider;
 use OCP\Lock\LockedException;
 use OCP\Mail\IMailer;
+use OCP\Server;
 use OCP\Share\Exceptions\GenericShareException;
 use OCP\Share\Exceptions\ShareNotFound;
 use OCP\Share\IAttributes as IShareAttributes;
@@ -41,37 +52,46 @@ use OCP\Share\IManager;
 use OCP\Share\IProviderFactory;
 use OCP\Share\IShare;
 use OCP\UserStatus\IManager as IUserStatusManager;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 use Test\TestCase;
+use Test\Traits\EmailValidatorTrait;
 
 /**
  * Class ShareAPIControllerTest
  *
  * @package OCA\Files_Sharing\Tests\Controller
- * @group DB
  */
+#[\PHPUnit\Framework\Attributes\Group(name: 'DB')]
 class ShareAPIControllerTest extends TestCase {
+	use EmailValidatorTrait;
 
 	private string $appName = 'files_sharing';
-	private \OC\Share20\Manager|\PHPUnit\Framework\MockObject\MockObject $shareManager;
-	private IGroupManager|\PHPUnit\Framework\MockObject\MockObject $groupManager;
-	private IUserManager|\PHPUnit\Framework\MockObject\MockObject $userManager;
-	private IRequest|\PHPUnit\Framework\MockObject\MockObject $request;
-	private IRootFolder|\PHPUnit\Framework\MockObject\MockObject $rootFolder;
-	private IURLGenerator|\PHPUnit\Framework\MockObject\MockObject $urlGenerator;
-	private string|\PHPUnit\Framework\MockObject\MockObject $currentUser;
+	private string $currentUser;
+
 	private ShareAPIController $ocs;
-	private IL10N|\PHPUnit\Framework\MockObject\MockObject $l;
-	private IConfig|\PHPUnit\Framework\MockObject\MockObject $config;
-	private IAppManager|\PHPUnit\Framework\MockObject\MockObject $appManager;
-	private IServerContainer|\PHPUnit\Framework\MockObject\MockObject $serverContainer;
-	private IUserStatusManager|\PHPUnit\Framework\MockObject\MockObject $userStatusManager;
-	private IPreview|\PHPUnit\Framework\MockObject\MockObject $previewManager;
-	private IDateTimeZone|\PHPUnit\Framework\MockObject\MockObject $dateTimeZone;
-	private LoggerInterface $logger;
-	private IProviderFactory|\PHPUnit\Framework\MockObject\MockObject $factory;
-	private IMailer|\PHPUnit\Framework\MockObject\MockObject $mailer;
+
+	private IManager&MockObject $shareManager;
+	private IGroupManager&MockObject $groupManager;
+	private IUserManager&MockObject $userManager;
+	private IRequest&MockObject $request;
+	private IRootFolder&MockObject $rootFolder;
+	private IURLGenerator&MockObject $urlGenerator;
+	private IL10N&MockObject $l;
+	private IConfig&MockObject $config;
+	private IAppConfig&MockObject $appConfig;
+	private IAppManager&MockObject $appManager;
+	private ContainerInterface&MockObject $serverContainer;
+	private IUserStatusManager&MockObject $userStatusManager;
+	private IPreview&MockObject $previewManager;
+	private IDateTimeZone&MockObject $dateTimeZone;
+	private LoggerInterface&MockObject $logger;
+	private IProviderFactory&MockObject $factory;
+	private IMailer&MockObject $mailer;
+	private ITagManager&MockObject $tagManager;
+	private TrustedServers&MockObject $trustedServers;
 
 	protected function setUp(): void {
 		$this->shareManager = $this->createMock(IManager::class);
@@ -95,6 +115,7 @@ class ShareAPIControllerTest extends TestCase {
 				return vsprintf($text, $parameters);
 			});
 		$this->config = $this->createMock(IConfig::class);
+		$this->appConfig = $this->createMock(IAppConfig::class);
 		$this->appManager = $this->createMock(IAppManager::class);
 		$this->serverContainer = $this->createMock(ContainerInterface::class);
 		$this->userStatusManager = $this->createMock(IUserStatusManager::class);
@@ -104,9 +125,13 @@ class ShareAPIControllerTest extends TestCase {
 				return $fileInfo->getMimeType() === 'mimeWithPreview';
 			});
 		$this->dateTimeZone = $this->createMock(IDateTimeZone::class);
+		$this->dateTimeZone->method('getTimeZone')
+			->willReturn(new \DateTimeZone('UTC'));
 		$this->logger = $this->createMock(LoggerInterface::class);
 		$this->factory = $this->createMock(IProviderFactory::class);
 		$this->mailer = $this->createMock(IMailer::class);
+		$this->tagManager = $this->createMock(ITagManager::class);
+		$this->trustedServers = $this->createMock(TrustedServers::class);
 
 		$this->ocs = new ShareAPIController(
 			$this->appName,
@@ -118,6 +143,7 @@ class ShareAPIControllerTest extends TestCase {
 			$this->urlGenerator,
 			$this->l,
 			$this->config,
+			$this->appConfig,
 			$this->appManager,
 			$this->serverContainer,
 			$this->userStatusManager,
@@ -126,14 +152,15 @@ class ShareAPIControllerTest extends TestCase {
 			$this->logger,
 			$this->factory,
 			$this->mailer,
+			$this->tagManager,
+			$this->getEmailValidatorWithStrictEmailCheck(),
+			$this->trustedServers,
 			$this->currentUser,
 		);
+
 	}
 
-	/**
-	 * @return ShareAPIController|\PHPUnit\Framework\MockObject\MockObject
-	 */
-	private function mockFormatShare() {
+	private function mockFormatShare(): ShareAPIController&MockObject {
 		return $this->getMockBuilder(ShareAPIController::class)
 			->setConstructorArgs([
 				$this->appName,
@@ -145,6 +172,7 @@ class ShareAPIControllerTest extends TestCase {
 				$this->urlGenerator,
 				$this->l,
 				$this->config,
+				$this->appConfig,
 				$this->appManager,
 				$this->serverContainer,
 				$this->userStatusManager,
@@ -153,13 +181,16 @@ class ShareAPIControllerTest extends TestCase {
 				$this->logger,
 				$this->factory,
 				$this->mailer,
+				$this->tagManager,
+				$this->getEmailValidatorWithStrictEmailCheck(),
+				$this->trustedServers,
 				$this->currentUser,
-			])->setMethods(['formatShare'])
+			])->onlyMethods(['formatShare'])
 			->getMock();
 	}
 
 	private function newShare() {
-		return \OC::$server->getShareManager()->newShare();
+		return Server::get(IManager::class)->newShare();
 	}
 
 
@@ -185,10 +216,10 @@ class ShareAPIControllerTest extends TestCase {
 		$this->expectExceptionMessage('Wrong share ID, share does not exist');
 
 		$this->shareManager
-			->expects($this->exactly(7))
+			->expects($this->exactly(6))
 			->method('getShareById')
 			->willReturnCallback(function ($id): void {
-				if ($id === 'ocinternal:42' || $id === 'ocRoomShare:42' || $id === 'ocFederatedSharing:42' || $id === 'ocCircleShare:42' || $id === 'ocMailShare:42' || $id === 'deck:42' || $id === 'sciencemesh:42') {
+				if ($id === 'ocinternal:42' || $id === 'ocRoomShare:42' || $id === 'ocFederatedSharing:42' || $id === 'ocCircleShare:42' || $id === 'ocMailShare:42' || $id === 'deck:42') {
 					throw new ShareNotFound();
 				} else {
 					throw new \Exception();
@@ -243,9 +274,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with($share->getNodeId())
-			->willReturn($node);
+			->willReturn([$node]);
 
 		$this->shareManager
 			->expects($this->once())
@@ -261,7 +292,7 @@ class ShareAPIControllerTest extends TestCase {
 		$node->expects($this->once())
 			->method('lock')
 			->with(ILockingProvider::LOCK_SHARED)
-			->will($this->throwException(new LockedException('mypath')));
+			->willThrowException(new LockedException('mypath'));
 
 		$this->assertFalse($this->invokePrivate($this->ocs, 'canDeleteFromSelf', [$share]));
 		$this->assertFalse($this->invokePrivate($this->ocs, 'canDeleteShare', [$share]));
@@ -408,9 +439,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with($share->getNodeId())
-			->willReturn($share->getNode());
+			->willReturn([$share->getNode()]);
 
 		$this->shareManager->expects($this->once())
 			->method('deleteFromSelf')
@@ -471,9 +502,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with($share->getNodeId())
-			->willReturn($share->getNode());
+			->willReturn([$share->getNode()]);
 
 		$this->shareManager->expects($this->never())
 			->method('deleteFromSelf');
@@ -503,9 +534,10 @@ class ShareAPIControllerTest extends TestCase {
 			->willReturn($mount);
 
 		$userFolder = $this->createMock(Folder::class);
-		$userFolder
-			->expects($this->exactly(2))
-			->method('getFirstNodeById')
+		$userFolder->method('getById')
+			->with(2)
+			->willReturn([$file]);
+		$userFolder->method('getFirstNodeById')
 			->with(2)
 			->willReturn($file);
 
@@ -558,16 +590,32 @@ class ShareAPIControllerTest extends TestCase {
 	}
 	*/
 
-	public function createShare($id, $shareType, $sharedWith, $sharedBy, $shareOwner, $path, $permissions,
-		$shareTime, $expiration, $parent, $target, $mail_send, $note = '', $token = null,
-		$password = null, $label = '', $attributes = null) {
-		$share = $this->getMockBuilder(IShare::class)->getMock();
+	public function createShare(
+		string $id,
+		int $shareType,
+		?string $sharedWith,
+		string $sharedBy,
+		string $shareOwner,
+		File|Folder|null $node,
+		int $permissions,
+		int $shareTime,
+		?\DateTime $expiration,
+		int $parent,
+		string $target,
+		int $mail_send,
+		string $note = '',
+		?string $token = null,
+		?string $password = null,
+		string $label = '',
+		?IShareAttributes $attributes = null,
+	): MockObject {
+		$share = $this->createMock(IShare::class);
 		$share->method('getId')->willReturn($id);
 		$share->method('getShareType')->willReturn($shareType);
 		$share->method('getSharedWith')->willReturn($sharedWith);
 		$share->method('getSharedBy')->willReturn($sharedBy);
 		$share->method('getShareOwner')->willReturn($shareOwner);
-		$share->method('getNode')->willReturn($path);
+		$share->method('getNode')->willReturn($node);
 		$share->method('getPermissions')->willReturn($permissions);
 		$share->method('getNote')->willReturn($note);
 		$share->method('getLabel')->willReturn($label);
@@ -581,59 +629,35 @@ class ShareAPIControllerTest extends TestCase {
 		$share->method('getToken')->willReturn($token);
 		$share->method('getPassword')->willReturn($password);
 
-		if ($shareType === IShare::TYPE_USER ||
-			$shareType === IShare::TYPE_GROUP ||
-			$shareType === IShare::TYPE_LINK) {
+		if ($shareType === IShare::TYPE_USER
+			|| $shareType === IShare::TYPE_GROUP
+			|| $shareType === IShare::TYPE_LINK) {
 			$share->method('getFullId')->willReturn('ocinternal:' . $id);
 		}
 
 		return $share;
 	}
 
-	public function dataGetShare() {
+	public static function dataGetShare(): array {
 		$data = [];
 
-		$cache = $this->getMockBuilder('OC\Files\Cache\Cache')
-			->disableOriginalConstructor()
-			->getMock();
-		$cache->method('getNumericStorageId')->willReturn(101);
+		$file = [
+			'class' => File::class,
+			'id' => 1,
+			'path' => 'file',
+			'mimeType' => 'myMimeType',
+		];
 
-		$storage = $this->getMockBuilder(IStorage::class)
-			->disableOriginalConstructor()
-			->getMock();
-		$storage->method('getId')->willReturn('STORAGE');
-		$storage->method('getCache')->willReturn($cache);
-
-		$parentFolder = $this->getMockBuilder(Folder::class)->getMock();
-		$parentFolder->method('getId')->willReturn(3);
-		$mountPoint = $this->createMock(IMountPoint::class);
-		$mountPoint->method('getMountType')->willReturn('');
-
-		$file = $this->getMockBuilder('OCP\Files\File')->getMock();
-		$file->method('getId')->willReturn(1);
-		$file->method('getPath')->willReturn('file');
-		$file->method('getStorage')->willReturn($storage);
-		$file->method('getParent')->willReturn($parentFolder);
-		$file->method('getSize')->willReturn(123465);
-		$file->method('getMTime')->willReturn(1234567890);
-		$file->method('getMimeType')->willReturn('myMimeType');
-		$file->method('getMountPoint')->willReturn($mountPoint);
-
-		$folder = $this->getMockBuilder(Folder::class)->getMock();
-		$folder->method('getId')->willReturn(2);
-		$folder->method('getPath')->willReturn('folder');
-		$folder->method('getStorage')->willReturn($storage);
-		$folder->method('getParent')->willReturn($parentFolder);
-		$folder->method('getSize')->willReturn(123465);
-		$folder->method('getMTime')->willReturn(1234567890);
-		$folder->method('getMimeType')->willReturn('myFolderMimeType');
-		$folder->method('getMountPoint')->willReturn($mountPoint);
-
-		[$shareAttributes, $shareAttributesReturnJson] = $this->mockShareAttributes();
+		$folder = [
+			'class' => Folder::class,
+			'id' => 2,
+			'path' => 'folder',
+			'mimeType' => 'myFolderMimeType',
+		];
 
 		// File shared with user
-		$share = $this->createShare(
-			100,
+		$share = [
+			'100',
 			IShare::TYPE_USER,
 			'userId',
 			'initiatorId',
@@ -646,10 +670,13 @@ class ShareAPIControllerTest extends TestCase {
 			'target',
 			0,
 			'personal note',
-			$shareAttributes,
-		);
+			null,
+			null,
+			'',
+			[],
+		];
 		$expected = [
-			'id' => 100,
+			'id' => '100',
 			'share_type' => IShare::TYPE_USER,
 			'share_with' => 'userId',
 			'share_with_displayname' => 'userDisplay',
@@ -664,7 +691,6 @@ class ShareAPIControllerTest extends TestCase {
 			'token' => null,
 			'expiration' => null,
 			'permissions' => 4,
-			'attributes' => $shareAttributesReturnJson,
 			'stime' => 5,
 			'parent' => null,
 			'storage_id' => 'STORAGE',
@@ -682,16 +708,15 @@ class ShareAPIControllerTest extends TestCase {
 			'can_delete' => false,
 			'item_size' => 123465,
 			'item_mtime' => 1234567890,
-			'attributes' => null,
 			'item_permissions' => 4,
 			'is-mount-root' => false,
 			'mount-type' => '',
 		];
-		$data[] = [$share, $expected];
+		$data['File shared with user'] = [$share, $expected, true];
 
 		// Folder shared with group
-		$share = $this->createShare(
-			101,
+		$share = [
+			'101',
 			IShare::TYPE_GROUP,
 			'groupId',
 			'initiatorId',
@@ -704,10 +729,13 @@ class ShareAPIControllerTest extends TestCase {
 			'target',
 			0,
 			'personal note',
-			$shareAttributes,
-		);
+			null,
+			null,
+			'',
+			[],
+		];
 		$expected = [
-			'id' => 101,
+			'id' => '101',
 			'share_type' => IShare::TYPE_GROUP,
 			'share_with' => 'groupId',
 			'share_with_displayname' => 'groupId',
@@ -721,7 +749,6 @@ class ShareAPIControllerTest extends TestCase {
 			'token' => null,
 			'expiration' => null,
 			'permissions' => 4,
-			'attributes' => $shareAttributesReturnJson,
 			'stime' => 5,
 			'parent' => null,
 			'storage_id' => 'STORAGE',
@@ -739,17 +766,16 @@ class ShareAPIControllerTest extends TestCase {
 			'can_delete' => false,
 			'item_size' => 123465,
 			'item_mtime' => 1234567890,
-			'attributes' => null,
 			'item_permissions' => 4,
 			'is-mount-root' => false,
 			'mount-type' => '',
 		];
-		$data[] = [$share, $expected];
+		$data['Folder shared with group'] = [$share, $expected, true];
 
 		// File shared by link with Expire
-		$expire = \DateTime::createFromFormat('Y-m-d h:i:s', '2000-01-02 01:02:03');
-		$share = $this->createShare(
-			101,
+		$expire = \DateTime::createFromFormat('Y-m-d H:i:s', '2000-01-02 23:59:59');
+		$share = [
+			'101',
 			IShare::TYPE_LINK,
 			null,
 			'initiatorId',
@@ -765,9 +791,9 @@ class ShareAPIControllerTest extends TestCase {
 			'token',
 			'password',
 			'first link share'
-		);
+		];
 		$expected = [
-			'id' => 101,
+			'id' => '101',
 			'share_type' => IShare::TYPE_LINK,
 			'password' => 'password',
 			'share_with' => 'password',
@@ -781,7 +807,7 @@ class ShareAPIControllerTest extends TestCase {
 			'file_target' => 'target',
 			'file_parent' => 3,
 			'token' => 'token',
-			'expiration' => '2000-01-02 00:00:00',
+			'expiration' => '2000-01-02 23:59:59',
 			'permissions' => 4,
 			'attributes' => null,
 			'stime' => 5,
@@ -802,21 +828,52 @@ class ShareAPIControllerTest extends TestCase {
 			'can_delete' => false,
 			'item_size' => 123465,
 			'item_mtime' => 1234567890,
-			'attributes' => null,
 			'item_permissions' => 4,
 			'is-mount-root' => false,
 			'mount-type' => '',
 		];
-		$data[] = [$share, $expected];
+		$data['File shared by link with Expire'] = [$share, $expected, false];
 
 		return $data;
 	}
 
-	/**
-	 * @dataProvider dataGetShare
-	 */
-	public function testGetShare(IShare $share, array $result): void {
-		/** @var ShareAPIController|\PHPUnit\Framework\MockObject\MockObject $ocs */
+	#[DataProvider(methodName: 'dataGetShare')]
+	public function testGetShare(array $shareParams, array $result, bool $attributes): void {
+
+		$cache = $this->createMock(ICache::class);
+		$cache->method('getNumericStorageId')->willReturn(101);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('getId')->willReturn('STORAGE');
+		$storage->method('getCache')->willReturn($cache);
+
+		$parentFolder = $this->createMock(Folder::class);
+		$parentFolder->method('getId')->willReturn(3);
+
+		$mountPoint = $this->createMock(IMountPoint::class);
+		$mountPoint->method('getMountType')->willReturn('');
+
+		$nodeParams = $shareParams[5];
+		$node = $this->createMock($nodeParams['class']);
+		$node->method('getId')->willReturn($nodeParams['id']);
+		$node->method('getPath')->willReturn($nodeParams['path']);
+		$node->method('getStorage')->willReturn($storage);
+		$node->method('getParent')->willReturn($parentFolder);
+		$node->method('getSize')->willReturn(123465);
+		$node->method('getMTime')->willReturn(1234567890);
+		$node->method('getMimeType')->willReturn($nodeParams['mimeType']);
+		$node->method('getMountPoint')->willReturn($mountPoint);
+
+		$shareParams[5] = $node;
+
+		if ($attributes) {
+			[$shareAttributes, $shareAttributesReturnJson] = $this->mockShareAttributes();
+			$result['attributes'] = $shareAttributesReturnJson;
+			$shareParams[16] = $shareAttributes;
+		}
+
+		$share = $this->createShare(...$shareParams);
+		/** @var ShareAPIController&MockObject $ocs */
 		$ocs = $this->getMockBuilder(ShareAPIController::class)
 			->setConstructorArgs([
 				$this->appName,
@@ -828,6 +885,7 @@ class ShareAPIControllerTest extends TestCase {
 				$this->urlGenerator,
 				$this->l,
 				$this->config,
+				$this->appConfig,
 				$this->appManager,
 				$this->serverContainer,
 				$this->userStatusManager,
@@ -836,9 +894,12 @@ class ShareAPIControllerTest extends TestCase {
 				$this->logger,
 				$this->factory,
 				$this->mailer,
+				$this->tagManager,
+				$this->getEmailValidatorWithStrictEmailCheck(),
+				$this->trustedServers,
 				$this->currentUser,
-
-			])->setMethods(['canAccessShare'])
+			])
+			->onlyMethods(['canAccessShare'])
 			->getMock();
 
 		$ocs->expects($this->any())
@@ -859,7 +920,6 @@ class ShareAPIControllerTest extends TestCase {
 		$userFolder->method('getById')
 			->with($share->getNodeId())
 			->willReturn([$share->getNode()]);
-
 		$userFolder->method('getFirstNodeById')
 			->with($share->getNodeId())
 			->willReturn($share->getNode());
@@ -898,9 +958,8 @@ class ShareAPIControllerTest extends TestCase {
 		]);
 		$this->dateTimeZone->method('getTimezone')->willReturn(new \DateTimeZone('UTC'));
 
-		$d = $ocs->getShare($share->getId())->getData()[0];
-
-		$this->assertEquals($result, $ocs->getShare($share->getId())->getData()[0]);
+		$data = $ocs->getShare((string)$share->getId())->getData()[0];
+		$this->assertEquals($result, $data);
 	}
 
 
@@ -908,7 +967,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->expectException(OCSNotFoundException::class);
 		$this->expectExceptionMessage('Wrong share ID, share does not exist');
 
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$share->setSharedBy('initiator')
 			->setSharedWith('recipient')
 			->setShareOwner('owner');
@@ -924,208 +983,217 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$this->ocs->getShare(42);
+		$this->ocs->getShare('42');
 	}
 
-	public function dataGetShares() {
-		$folder = $this->getMockBuilder(Folder::class)->getMock();
-		$file1 = $this->getMockBuilder(File::class)->getMock();
-		$file1->method('getName')
-			->willReturn('file1');
-		$file2 = $this->getMockBuilder(File::class)->getMock();
-		$file2->method('getName')
-			->willReturn('file2');
+	public static function dataGetShares(): array {
+		$file1 = [
+			'class' => File::class,
+			'methods' => [
+				'getName' => 'file1',
+			]
+		];
+		$file2 = [
+			'class' => File::class,
+			'methods' => [
+				'getName' => 'file2',
+			]
+		];
 
-		$folder->method('getDirectoryListing')
-			->willReturn([$file1, $file2]);
+		$folder = [
+			'class' => Folder::class,
+			'methods' => [
+				'getDirectoryListing' => [$file1, $file2]
+			]
+		];
 
-		$file1UserShareOwner = \OC::$server->getShareManager()->newShare();
-		$file1UserShareOwner->setShareType(IShare::TYPE_USER)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('currentUser')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file1)
-			->setId(4);
+		$file1UserShareOwner = [
+			'type' => IShare::TYPE_USER,
+			'sharedWith' => 'recipient',
+			'sharedBy' => 'initiator',
+			'owner' => 'currentUser',
+			'node' => $file1,
+			'id' => 4,
+		];
 
 		$file1UserShareOwnerExpected = [
 			'id' => 4,
 			'share_type' => IShare::TYPE_USER,
 		];
 
-		$file1UserShareInitiator = \OC::$server->getShareManager()->newShare();
-		$file1UserShareInitiator->setShareType(IShare::TYPE_USER)
-			->setSharedWith('recipient')
-			->setSharedBy('currentUser')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file1)
-			->setId(8);
+		$file1UserShareInitiator = [
+			'type' => IShare::TYPE_USER,
+			'sharedWith' => 'recipient',
+			'sharedBy' => 'currentUser',
+			'owner' => 'owner',
+			'node' => $file1,
+			'id' => 8,
+		];
 
 		$file1UserShareInitiatorExpected = [
 			'id' => 8,
 			'share_type' => IShare::TYPE_USER,
 		];
 
-		$file1UserShareRecipient = \OC::$server->getShareManager()->newShare();
-		$file1UserShareRecipient->setShareType(IShare::TYPE_USER)
-			->setSharedWith('currentUser')
-			->setSharedBy('initiator')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file1)
-			->setId(15);
+		$file1UserShareRecipient = [
+			'type' => IShare::TYPE_USER,
+			'sharedWith' => 'currentUser',
+			'sharedBy' => 'initiator',
+			'owner' => 'owner',
+			'node' => $file1,
+			'id' => 15,
+		];
 
 		$file1UserShareRecipientExpected = [
 			'id' => 15,
 			'share_type' => IShare::TYPE_USER,
 		];
 
-		$file1UserShareOther = \OC::$server->getShareManager()->newShare();
-		$file1UserShareOther->setShareType(IShare::TYPE_USER)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file1)
-			->setId(16);
+		$file1UserShareOther = [
+			'type' => IShare::TYPE_USER,
+			'sharedWith' => 'recipient',
+			'sharedBy' => 'initiator',
+			'owner' => 'owner',
+			'node' => $file1,
+			'id' => 16,
+		];
 
 		$file1UserShareOtherExpected = [
 			'id' => 16,
 			'share_type' => IShare::TYPE_USER,
 		];
 
-		$file1GroupShareOwner = \OC::$server->getShareManager()->newShare();
-		$file1GroupShareOwner->setShareType(IShare::TYPE_GROUP)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('currentUser')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file1)
-			->setId(23);
+		$file1GroupShareOwner = [
+			'type' => IShare::TYPE_GROUP,
+			'sharedWith' => 'recipient',
+			'sharedBy' => 'initiator',
+			'owner' => 'currentUser',
+			'node' => $file1,
+			'id' => 23,
+		];
 
 		$file1GroupShareOwnerExpected = [
 			'id' => 23,
 			'share_type' => IShare::TYPE_GROUP,
 		];
 
-		$file1GroupShareRecipient = \OC::$server->getShareManager()->newShare();
-		$file1GroupShareRecipient->setShareType(IShare::TYPE_GROUP)
-			->setSharedWith('currentUserGroup')
-			->setSharedBy('initiator')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file1)
-			->setId(42);
+		$file1GroupShareRecipient = [
+			'type' => IShare::TYPE_GROUP,
+			'sharedWith' => 'currentUserGroup',
+			'sharedBy' => 'initiator',
+			'owner' => 'owner',
+			'node' => $file1,
+			'id' => 42,
+		];
 
 		$file1GroupShareRecipientExpected = [
 			'id' => 42,
 			'share_type' => IShare::TYPE_GROUP,
 		];
 
-		$file1GroupShareOther = \OC::$server->getShareManager()->newShare();
-		$file1GroupShareOther->setShareType(IShare::TYPE_GROUP)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file1)
-			->setId(108);
+		$file1GroupShareOther = [
+			'type' => IShare::TYPE_GROUP,
+			'sharedWith' => 'recipient',
+			'sharedBy' => 'initiator',
+			'owner' => 'owner',
+			'node' => $file1,
+			'id' => 108,
+		];
 
-		$file1LinkShareOwner = \OC::$server->getShareManager()->newShare();
-		$file1LinkShareOwner->setShareType(IShare::TYPE_LINK)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('currentUser')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file1)
-			->setId(415);
+		$file1LinkShareOwner = [
+			'type' => IShare::TYPE_LINK,
+			'sharedWith' => 'recipient',
+			'sharedBy' => 'initiator',
+			'owner' => 'currentUser',
+			'node' => $file1,
+			'id' => 415,
+		];
 
 		$file1LinkShareOwnerExpected = [
 			'id' => 415,
 			'share_type' => IShare::TYPE_LINK,
 		];
 
-		$file1EmailShareOwner = \OC::$server->getShareManager()->newShare();
-		$file1EmailShareOwner->setShareType(IShare::TYPE_EMAIL)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('currentUser')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file1)
-			->setId(416);
+		$file1EmailShareOwner = [
+			'type' => IShare::TYPE_EMAIL,
+			'sharedWith' => 'recipient',
+			'sharedBy' => 'initiator',
+			'owner' => 'currentUser',
+			'node' => $file1,
+			'id' => 416,
+		];
 
 		$file1EmailShareOwnerExpected = [
 			'id' => 416,
 			'share_type' => IShare::TYPE_EMAIL,
 		];
 
-		$file1CircleShareOwner = \OC::$server->getShareManager()->newShare();
-		$file1CircleShareOwner->setShareType(IShare::TYPE_CIRCLE)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('currentUser')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file1)
-			->setId(423);
+		$file1CircleShareOwner = [
+			'type' => IShare::TYPE_CIRCLE,
+			'sharedWith' => 'recipient',
+			'sharedBy' => 'initiator',
+			'owner' => 'currentUser',
+			'node' => $file1,
+			'id' => 423,
+		];
 
 		$file1CircleShareOwnerExpected = [
 			'id' => 423,
 			'share_type' => IShare::TYPE_CIRCLE,
 		];
 
-		$file1RoomShareOwner = \OC::$server->getShareManager()->newShare();
-		$file1RoomShareOwner->setShareType(IShare::TYPE_ROOM)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('currentUser')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file1)
-			->setId(442);
+		$file1RoomShareOwner = [
+			'type' => IShare::TYPE_ROOM,
+			'sharedWith' => 'recipient',
+			'sharedBy' => 'initiator',
+			'owner' => 'currentUser',
+			'node' => $file1,
+			'id' => 442,
+		];
 
 		$file1RoomShareOwnerExpected = [
 			'id' => 442,
 			'share_type' => IShare::TYPE_ROOM,
 		];
 
-		$file1RemoteShareOwner = \OC::$server->getShareManager()->newShare();
-		$file1RemoteShareOwner->setShareType(IShare::TYPE_REMOTE)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('currentUser')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setExpirationDate(new \DateTime('2000-01-01T01:02:03'))
-			->setNode($file1)
-			->setId(815);
+		$file1RemoteShareOwner = [
+			'type' => IShare::TYPE_REMOTE,
+			'sharedWith' => 'recipient',
+			'sharedBy' => 'initiator',
+			'owner' => 'currentUser',
+			'expirationDate' => new \DateTime('2000-01-01T01:02:03'),
+			'node' => $file1,
+			'id' => 815,
+		];
 
 		$file1RemoteShareOwnerExpected = [
 			'id' => 815,
 			'share_type' => IShare::TYPE_REMOTE,
 		];
 
-		$file1RemoteGroupShareOwner = \OC::$server->getShareManager()->newShare();
-		$file1RemoteGroupShareOwner->setShareType(IShare::TYPE_REMOTE_GROUP)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('currentUser')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setExpirationDate(new \DateTime('2000-01-02T01:02:03'))
-			->setNode($file1)
-			->setId(816);
+		$file1RemoteGroupShareOwner = [
+			'type' => IShare::TYPE_REMOTE_GROUP,
+			'sharedWith' => 'recipient',
+			'sharedBy' => 'initiator',
+			'owner' => 'currentUser',
+			'expirationDate' => new \DateTime('2000-01-01T01:02:03'),
+			'node' => $file1,
+			'id' => 816,
+		];
 
 		$file1RemoteGroupShareOwnerExpected = [
 			'id' => 816,
 			'share_type' => IShare::TYPE_REMOTE_GROUP,
 		];
 
-		$file2UserShareOwner = \OC::$server->getShareManager()->newShare();
-		$file2UserShareOwner->setShareType(IShare::TYPE_USER)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('currentUser')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file2)
-			->setId(823);
+		$file2UserShareOwner = [
+			'type' => IShare::TYPE_USER,
+			'sharedWith' => 'recipient',
+			'sharedBy' => 'initiator',
+			'owner' => 'currentUser',
+			'node' => $file2,
+			'id' => 823,
+		];
 
 		$file2UserShareOwnerExpected = [
 			'id' => 823,
@@ -1135,7 +1203,7 @@ class ShareAPIControllerTest extends TestCase {
 		$data = [
 			[
 				[
-					'path' => $file1,
+					'node' => $file1,
 				],
 				[
 					'file1' => [
@@ -1150,7 +1218,7 @@ class ShareAPIControllerTest extends TestCase {
 			],
 			[
 				[
-					'path' => $file1,
+					'node' => $file1,
 				],
 				[
 					'file1' => [
@@ -1165,7 +1233,7 @@ class ShareAPIControllerTest extends TestCase {
 			],
 			[
 				[
-					'path' => $file1,
+					'node' => $file1,
 				],
 				[
 					'file1' => [
@@ -1182,7 +1250,7 @@ class ShareAPIControllerTest extends TestCase {
 			],
 			[
 				[
-					'path' => $file1,
+					'node' => $file1,
 				],
 				[
 					'file1' => [
@@ -1197,7 +1265,7 @@ class ShareAPIControllerTest extends TestCase {
 			],
 			[
 				[
-					'path' => $file1,
+					'node' => $file1,
 				],
 				[
 					'file1' => [
@@ -1214,7 +1282,7 @@ class ShareAPIControllerTest extends TestCase {
 			],
 			[
 				[
-					'path' => $file1,
+					'node' => $file1,
 				],
 				[
 					'file1' => [
@@ -1241,7 +1309,7 @@ class ShareAPIControllerTest extends TestCase {
 			],
 			[
 				[
-					'path' => $file1,
+					'node' => $file1,
 				],
 				[
 					'file1' => [
@@ -1272,7 +1340,7 @@ class ShareAPIControllerTest extends TestCase {
 			],
 			[
 				[
-					'path' => $folder,
+					'node' => $folder,
 					'subfiles' => 'true',
 				],
 				[
@@ -1292,7 +1360,7 @@ class ShareAPIControllerTest extends TestCase {
 			],
 			[
 				[
-					'path' => $folder,
+					'node' => $folder,
 					'subfiles' => 'true',
 				],
 				[
@@ -1308,7 +1376,7 @@ class ShareAPIControllerTest extends TestCase {
 			],
 			[
 				[
-					'path' => $folder,
+					'node' => $folder,
 					'subfiles' => 'true',
 				],
 				[
@@ -1324,7 +1392,7 @@ class ShareAPIControllerTest extends TestCase {
 			],
 			[
 				[
-					'path' => $folder,
+					'node' => $folder,
 					'subfiles' => 'true',
 				],
 				[
@@ -1349,7 +1417,7 @@ class ShareAPIControllerTest extends TestCase {
 			// share with others would be included too in the results.
 			[
 				[
-					'path' => $folder,
+					'node' => $folder,
 					'subfiles' => 'true',
 				],
 				[
@@ -1365,7 +1433,7 @@ class ShareAPIControllerTest extends TestCase {
 			],
 			[
 				[
-					'path' => $folder,
+					'node' => $folder,
 					'subfiles' => 'true',
 				],
 				[
@@ -1383,7 +1451,7 @@ class ShareAPIControllerTest extends TestCase {
 			],
 			[
 				[
-					'path' => $folder,
+					'node' => $folder,
 					'subfiles' => 'true',
 				],
 				[
@@ -1411,7 +1479,7 @@ class ShareAPIControllerTest extends TestCase {
 			],
 			[
 				[
-					'path' => $folder,
+					'node' => $folder,
 					'subfiles' => 'true',
 				],
 				[
@@ -1446,11 +1514,81 @@ class ShareAPIControllerTest extends TestCase {
 		return $data;
 	}
 
-	/**
-	 * @dataProvider dataGetShares
-	 */
+	private function mockSimpleNode(string $class, array $methods): MockObject {
+		$node = $this->createMock($class);
+		foreach ($methods as $method => $return) {
+			if ($method === 'getDirectoryListing') {
+				$return = array_map(
+					fn ($nodeParams) => $this->mockSimpleNode(...$nodeParams),
+					$return
+				);
+			}
+			$node->method($method)->willReturn($return);
+		}
+		return $node;
+	}
+
+	#[DataProvider(methodName: 'dataGetShares')]
 	public function testGetShares(array $getSharesParameters, array $shares, array $extraShareTypes, array $expected): void {
-		/** @var ShareAPIController $ocs */
+		$shares = array_map(
+			fn ($sharesByType) => array_map(
+				fn ($shareList) => array_map(
+					function (array $shareParams): IShare {
+						$share = Server::get(IManager::class)->newShare();
+						$share->setShareType($shareParams['type'])
+							->setSharedBy($shareParams['sharedBy'])
+							->setShareOwner($shareParams['owner'])
+							->setPermissions(Constants::PERMISSION_READ)
+							->setId($shareParams['id']);
+						if (isset($shareParams['sharedWith'])) {
+							$share->setSharedWith($shareParams['sharedWith']);
+						}
+						if (isset($shareParams['sharedWithDisplayName'])) {
+							$share->setSharedWithDisplayName($shareParams['sharedWithDisplayName']);
+						}
+						if (isset($shareParams['sharedWithAvatar'])) {
+							$share->setSharedWithAvatar($shareParams['sharedWithAvatar']);
+						}
+						if (isset($shareParams['attributes'])) {
+							$shareAttributes = $this->createMock(IShareAttributes::class);
+							$shareAttributes->method('toArray')->willReturn($shareParams['attributes']);
+							$shareAttributes->method('getAttribute')->with('permissions', 'download')->willReturn(true);
+							$share->setAttributes($shareAttributes);
+
+							$expects['attributes'] = \json_encode($shareParams['attributes']);
+						}
+						if (isset($shareParams['node'])) {
+							$node = $this->mockSimpleNode(...$shareParams['node']);
+							$share->setNode($node);
+						}
+						if (isset($shareParams['note'])) {
+							$share->setNote($shareParams['note']);
+						}
+						if (isset($shareParams['expirationDate'])) {
+							$share->setExpirationDate($shareParams['expirationDate']);
+						}
+						if (isset($shareParams['token'])) {
+							$share->setToken($shareParams['token']);
+						}
+						if (isset($shareParams['label'])) {
+							$share->setLabel($shareParams['label']);
+						}
+						if (isset($shareParams['password'])) {
+							$share->setPassword($shareParams['password']);
+						}
+						if (isset($shareParams['sendPasswordByTalk'])) {
+							$share->setSendPasswordByTalk($shareParams['sendPasswordByTalk']);
+						}
+						return $share;
+					},
+					$shareList
+				),
+				$sharesByType
+			),
+			$shares
+		);
+
+		/** @var ShareAPIController&MockObject $ocs */
 		$ocs = $this->getMockBuilder(ShareAPIController::class)
 			->setConstructorArgs([
 				$this->appName,
@@ -1462,6 +1600,7 @@ class ShareAPIControllerTest extends TestCase {
 				$this->urlGenerator,
 				$this->l,
 				$this->config,
+				$this->appConfig,
 				$this->appManager,
 				$this->serverContainer,
 				$this->userStatusManager,
@@ -1470,8 +1609,12 @@ class ShareAPIControllerTest extends TestCase {
 				$this->logger,
 				$this->factory,
 				$this->mailer,
+				$this->tagManager,
+				$this->getEmailValidatorWithStrictEmailCheck(),
+				$this->trustedServers,
 				$this->currentUser,
-			])->setMethods(['formatShare'])
+			])
+			->onlyMethods(['formatShare'])
 			->getMock();
 
 		$ocs->method('formatShare')
@@ -1487,7 +1630,7 @@ class ShareAPIControllerTest extends TestCase {
 		$userFolder = $this->getMockBuilder(Folder::class)->getMock();
 		$userFolder->method('get')
 			->with('path')
-			->willReturn($getSharesParameters['path']);
+			->willReturn($this->mockSimpleNode(...$getSharesParameters['node']));
 
 		$this->rootFolder->method('getUserFolder')
 			->with($this->currentUser)
@@ -1530,126 +1673,154 @@ class ShareAPIControllerTest extends TestCase {
 		$this->assertEquals($expected, $result->getData());
 	}
 
-	public function testCanAccessShare(): void {
-		$share = $this->getMockBuilder(IShare::class)->getMock();
+	public function testCanAccessShareAsOwner(): void {
+		$share = $this->createMock(IShare::class);
 		$share->method('getShareOwner')->willReturn($this->currentUser);
 		$this->assertTrue($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
+	}
 
-		$share = $this->getMockBuilder(IShare::class)->getMock();
+	public function testCanAccessShareAsSharer(): void {
+		$share = $this->createMock(IShare::class);
 		$share->method('getSharedBy')->willReturn($this->currentUser);
 		$this->assertTrue($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
+	}
 
-		$share = $this->getMockBuilder(IShare::class)->getMock();
+	public function testCanAccessShareAsSharee(): void {
+		$share = $this->createMock(IShare::class);
 		$share->method('getShareType')->willReturn(IShare::TYPE_USER);
 		$share->method('getSharedWith')->willReturn($this->currentUser);
 		$this->assertTrue($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
+	}
 
-		$file = $this->getMockBuilder(File::class)->getMock();
+	public function testCannotAccessLinkShare(): void {
+		$share = $this->createMock(IShare::class);
+		$share->method('getShareType')->willReturn(IShare::TYPE_LINK);
+		$share->method('getNodeId')->willReturn(42);
 
-		$userFolder = $this->getMockBuilder(Folder::class)->getMock();
+		$userFolder = $this->createMock(Folder::class);
 		$this->rootFolder->method('getUserFolder')
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
+		$this->assertFalse($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
+	}
+
+	#[DataProvider(methodName: 'dataCanAccessShareWithPermissions')]
+	public function testCanAccessShareWithPermissions(int $permissions, bool $expected): void {
+		$share = $this->createMock(IShare::class);
+		$share->method('getShareType')->willReturn(IShare::TYPE_USER);
+		$share->method('getSharedWith')->willReturn($this->createMock(IUser::class));
+		$share->method('getNodeId')->willReturn(42);
+
+		$file = $this->createMock(File::class);
+
+		$userFolder = $this->getMockBuilder(Folder::class)->getMock();
 		$userFolder->method('getFirstNodeById')
 			->with($share->getNodeId())
 			->willReturn($file);
+		$userFolder->method('getById')
+			->with($share->getNodeId())
+			->willReturn([$file]);
+		$this->rootFolder->method('getUserFolder')
+			->with($this->currentUser)
+			->willReturn($userFolder);
 
 		$file->method('getPermissions')
-			->will($this->onConsecutiveCalls(Constants::PERMISSION_SHARE, Constants::PERMISSION_READ));
+			->willReturn($permissions);
 
-		// getPermissions -> share
-		$share = $this->getMockBuilder(IShare::class)->getMock();
-		$share->method('getShareType')->willReturn(IShare::TYPE_USER);
-		$share->method('getSharedWith')->willReturn($this->getMockBuilder(IUser::class)->getMock());
-		$this->assertTrue($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
+		if ($expected) {
+			$this->assertTrue($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
+		} else {
+			$this->assertFalse($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
+		}
+	}
 
-		// getPermissions -> read
-		$share = $this->getMockBuilder(IShare::class)->getMock();
-		$share->method('getShareType')->willReturn(IShare::TYPE_USER);
-		$share->method('getSharedWith')->willReturn($this->getMockBuilder(IUser::class)->getMock());
-		$this->assertFalse($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
+	public static function dataCanAccessShareWithPermissions(): array {
+		return [
+			[Constants::PERMISSION_SHARE, true],
+			[Constants::PERMISSION_READ, false],
+			[Constants::PERMISSION_READ | Constants::PERMISSION_SHARE, true],
+		];
+	}
 
-		$share = $this->getMockBuilder(IShare::class)->getMock();
+	#[DataProvider(methodName: 'dataCanAccessShareAsGroupMember')]
+	public function testCanAccessShareAsGroupMember(string $group, bool $expected): void {
+		$share = $this->createMock(IShare::class);
 		$share->method('getShareType')->willReturn(IShare::TYPE_GROUP);
-		$share->method('getSharedWith')->willReturn('group');
+		$share->method('getSharedWith')->willReturn($group);
+		$share->method('getNodeId')->willReturn(42);
+
+		$file = $this->createMock(File::class);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getFirstNodeById')
+			->with($share->getNodeId())
+			->willReturn($file);
+		$userFolder->method('getById')
+			->with($share->getNodeId())
+			->willReturn([$file]);
+		$this->rootFolder->method('getUserFolder')
+			->with($this->currentUser)
+			->willReturn($userFolder);
 
 		$user = $this->createMock(IUser::class);
 		$this->userManager->method('get')
 			->with($this->currentUser)
 			->willReturn($user);
 
-		$group = $this->getMockBuilder(IGroup::class)->getMock();
+		$group = $this->createMock(IGroup::class);
 		$group->method('inGroup')->with($user)->willReturn(true);
-		$group2 = $this->getMockBuilder(IGroup::class)->getMock();
+		$group2 = $this->createMock(IGroup::class);
 		$group2->method('inGroup')->with($user)->willReturn(false);
 
 		$this->groupManager->method('get')->willReturnMap([
 			['group', $group],
 			['group2', $group2],
-			['groupnull', null],
+			['group-null', null],
 		]);
-		$this->assertTrue($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
 
-		$share = $this->createMock(IShare::class);
-		$share->method('getShareType')->willReturn(IShare::TYPE_GROUP);
-		$share->method('getSharedWith')->willReturn('group2');
-		$this->assertFalse($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
-
-		// null group
-		$share = $this->createMock(IShare::class);
-		$share->method('getShareType')->willReturn(IShare::TYPE_GROUP);
-		$share->method('getSharedWith')->willReturn('groupnull');
-		$this->assertFalse($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
-
-		$share = $this->createMock(IShare::class);
-		$share->method('getShareType')->willReturn(IShare::TYPE_LINK);
-		$this->assertFalse($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
+		if ($expected) {
+			$this->assertTrue($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
+		} else {
+			$this->assertFalse($this->invokePrivate($this->ocs, 'canAccessShare', [$share]));
+		}
 	}
 
-	public function dataCanAccessRoomShare() {
-		$result = [];
+	public static function dataCanAccessShareAsGroupMember(): array {
+		return [
+			['group', true],
+			['group2', false],
+			['group-null', false],
+		];
+	}
 
+	public static function dataCanAccessRoomShare(): array {
+		return [
+			[false, false, false],
+			[false, false, true],
+			[true, true, true],
+			[false, true, false],
+		];
+	}
+
+	#[DataProvider(methodName: 'dataCanAccessRoomShare')]
+	public function testCanAccessRoomShare(
+		bool $expected,
+		bool $helperAvailable,
+		bool $canAccessShareByHelper,
+	): void {
 		$share = $this->createMock(IShare::class);
 		$share->method('getShareType')->willReturn(IShare::TYPE_ROOM);
 		$share->method('getSharedWith')->willReturn('recipientRoom');
 
-		$result[] = [
-			false, $share, false, false
-		];
-
-		$result[] = [
-			false, $share, false, true
-		];
-
-		$result[] = [
-			true, $share, true, true
-		];
-
-		$result[] = [
-			false, $share, true, false
-		];
-
-		return $result;
-	}
-
-	/**
-	 * @dataProvider dataCanAccessRoomShare
-	 *
-	 * @param bool $expects
-	 * @param IShare $share
-	 * @param bool helperAvailable
-	 * @param bool canAccessShareByHelper
-	 */
-	public function testCanAccessRoomShare(bool $expected, IShare $share, bool $helperAvailable, bool $canAccessShareByHelper): void {
 		$userFolder = $this->getMockBuilder(Folder::class)->getMock();
 		$this->rootFolder->method('getUserFolder')
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with($share->getNodeId())
-			->willReturn($share->getNode());
+			->willReturn([$share->getNode()]);
 
 		if (!$helperAvailable) {
 			$this->appManager->method('isEnabledForUser')
@@ -1660,8 +1831,11 @@ class ShareAPIControllerTest extends TestCase {
 				->with('spreed')
 				->willReturn(true);
 
-			$helper = $this->getMockBuilder('\OCA\Talk\Share\Helper\ShareAPIController')
-				->setMethods(['canAccessShare'])
+			// This is not possible anymore with PHPUnit 10+
+			// as `setMethods` was removed and now real reflection is used, thus the class needs to exist.
+			// $helper = $this->getMockBuilder('\OCA\Talk\Share\Helper\ShareAPIController')
+			$helper = $this->getMockBuilder(\stdClass::class)
+				->addMethods(['canAccessShare'])
 				->getMock();
 			$helper->method('canAccessShare')
 				->with($share, $this->currentUser)
@@ -1697,40 +1871,37 @@ class ShareAPIControllerTest extends TestCase {
 		$userFolder->expects($this->once())
 			->method('get')
 			->with('invalid-path')
-			->will($this->throwException(new NotFoundException()));
+			->willThrowException(new NotFoundException());
 
 		$this->ocs->createShare('invalid-path');
 	}
 
-
-	public function testCreateShareInvalidPermissions(): void {
-		$this->expectException(OCSNotFoundException::class);
-		$this->expectExceptionMessage('Invalid permissions');
+	public function testCreateShareInvalidShareType(): void {
+		$this->expectException(OCSBadRequestException::class);
+		$this->expectExceptionMessage('Unknown share type');
 
 		$share = $this->newShare();
 		$this->shareManager->method('newShare')->willReturn($share);
 
-		$userFolder = $this->getMockBuilder(Folder::class)->getMock();
-		$this->rootFolder->expects($this->once())
+		[$userFolder, $file] = $this->getNonSharedUserFile();
+		$this->rootFolder->expects($this->atLeastOnce())
 			->method('getUserFolder')
 			->with('currentUser')
 			->willReturn($userFolder);
 
-		$path = $this->getMockBuilder(File::class)->getMock();
-		$userFolder->expects($this->once())
+		$userFolder->expects($this->atLeastOnce())
 			->method('get')
 			->with('valid-path')
-			->willReturn($path);
+			->willReturn($file);
 		$userFolder->method('getById')
 			->willReturn([]);
 
-		$path->expects($this->once())
+		$file->expects($this->once())
 			->method('lock')
 			->with(ILockingProvider::LOCK_SHARED);
 
-		$this->ocs->createShare('valid-path', 32);
+		$this->ocs->createShare('valid-path', 31);
 	}
-
 
 	public function testCreateShareUserNoShareWith(): void {
 		$this->expectException(OCSNotFoundException::class);
@@ -1740,8 +1911,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->shareManager->method('newShare')->willReturn($share);
 
 		[$userFolder, $path] = $this->getNonSharedUserFile();
-		$this->rootFolder->expects($this->exactly(2))
-			->method('getUserFolder')
+		$this->rootFolder->method('getUserFolder')
 			->with('currentUser')
 			->willReturn($userFolder);
 
@@ -1768,8 +1938,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->shareManager->method('newShare')->willReturn($share);
 
 		[$userFolder, $path] = $this->getNonSharedUserFile();
-		$this->rootFolder->expects($this->exactly(2))
-			->method('getUserFolder')
+		$this->rootFolder->method('getUserFolder')
 			->with('currentUser')
 			->willReturn($userFolder);
 
@@ -1805,6 +1974,7 @@ class ShareAPIControllerTest extends TestCase {
 				$this->urlGenerator,
 				$this->l,
 				$this->config,
+				$this->appConfig,
 				$this->appManager,
 				$this->serverContainer,
 				$this->userStatusManager,
@@ -1813,8 +1983,11 @@ class ShareAPIControllerTest extends TestCase {
 				$this->logger,
 				$this->factory,
 				$this->mailer,
+				$this->tagManager,
+				$this->getEmailValidatorWithStrictEmailCheck(),
+				$this->trustedServers,
 				$this->currentUser,
-			])->setMethods(['formatShare'])
+			])->onlyMethods(['formatShare'])
 			->getMock();
 
 		[$userFolder, $path] = $this->getNonSharedUserFile();
@@ -1838,15 +2011,15 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->method('createShare')
 			->with($this->callback(function (IShare $share) use ($path) {
-				return $share->getNode() === $path &&
-					$share->getPermissions() === (
-						Constants::PERMISSION_ALL &
-						~Constants::PERMISSION_DELETE &
-						~Constants::PERMISSION_CREATE
-					) &&
-					$share->getShareType() === IShare::TYPE_USER &&
-					$share->getSharedWith() === 'validUser' &&
-					$share->getSharedBy() === 'currentUser';
+				return $share->getNode() === $path
+					&& $share->getPermissions() === (
+						Constants::PERMISSION_ALL
+						& ~Constants::PERMISSION_DELETE
+						& ~Constants::PERMISSION_CREATE
+					)
+					&& $share->getShareType() === IShare::TYPE_USER
+					&& $share->getSharedWith() === 'validUser'
+					&& $share->getSharedBy() === 'currentUser';
 			}))
 			->willReturnArgument(0);
 
@@ -1868,8 +2041,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->shareManager->method('allowGroupSharing')->willReturn(true);
 
 		[$userFolder, $path] = $this->getNonSharedUserFile();
-		$this->rootFolder->expects($this->exactly(2))
-			->method('getUserFolder')
+		$this->rootFolder->method('getUserFolder')
 			->with('currentUser')
 			->willReturn($userFolder);
 
@@ -1891,7 +2063,7 @@ class ShareAPIControllerTest extends TestCase {
 		$share = $this->newShare();
 		$this->shareManager->method('newShare')->willReturn($share);
 
-		/** @var ShareAPIController|\PHPUnit\Framework\MockObject\MockObject $ocs */
+		/** @var ShareAPIController&MockObject $ocs */
 		$ocs = $this->getMockBuilder(ShareAPIController::class)
 			->setConstructorArgs([
 				$this->appName,
@@ -1903,6 +2075,7 @@ class ShareAPIControllerTest extends TestCase {
 				$this->urlGenerator,
 				$this->l,
 				$this->config,
+				$this->appConfig,
 				$this->appManager,
 				$this->serverContainer,
 				$this->userStatusManager,
@@ -1911,8 +2084,11 @@ class ShareAPIControllerTest extends TestCase {
 				$this->logger,
 				$this->factory,
 				$this->mailer,
+				$this->tagManager,
+				$this->getEmailValidatorWithStrictEmailCheck(),
+				$this->trustedServers,
 				$this->currentUser,
-			])->setMethods(['formatShare'])
+			])->onlyMethods(['formatShare'])
 			->getMock();
 
 		$this->request
@@ -1949,11 +2125,11 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->method('createShare')
 			->with($this->callback(function (IShare $share) use ($path) {
-				return $share->getNode() === $path &&
-				$share->getPermissions() === Constants::PERMISSION_ALL &&
-				$share->getShareType() === IShare::TYPE_GROUP &&
-				$share->getSharedWith() === 'validGroup' &&
-				$share->getSharedBy() === 'currentUser';
+				return $share->getNode() === $path
+				&& $share->getPermissions() === Constants::PERMISSION_ALL
+				&& $share->getShareType() === IShare::TYPE_GROUP
+				&& $share->getSharedWith() === 'validGroup'
+				&& $share->getSharedBy() === 'currentUser';
 			}))
 			->willReturnArgument(0);
 
@@ -1973,8 +2149,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->shareManager->method('newShare')->willReturn($share);
 
 		[$userFolder, $path] = $this->getNonSharedUserFolder();
-		$this->rootFolder->expects($this->exactly(2))
-			->method('getUserFolder')
+		$this->rootFolder->method('getUserFolder')
 			->with('currentUser')
 			->willReturn($userFolder);
 
@@ -2020,7 +2195,9 @@ class ShareAPIControllerTest extends TestCase {
 		$this->rootFolder->method('getById')
 			->willReturn([]);
 
-		$this->shareManager->method('newShare')->willReturn(\OC::$server->getShareManager()->newShare());
+		$this->shareManager->method('newShare')->willReturn(Server::get(IManager::class)->newShare());
+		$this->shareManager->method('shareApiLinkAllowPublicUpload')->willReturn(true);
+		$this->shareManager->method('shareApiAllowLinks')->willReturn(false);
 
 		$this->ocs->createShare('valid-path', Constants::PERMISSION_ALL, IShare::TYPE_LINK);
 	}
@@ -2044,7 +2221,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->rootFolder->method('getById')
 			->willReturn([]);
 
-		$this->shareManager->method('newShare')->willReturn(\OC::$server->getShareManager()->newShare());
+		$this->shareManager->method('newShare')->willReturn(Server::get(IManager::class)->newShare());
 		$this->shareManager->method('shareApiAllowLinks')->willReturn(true);
 
 		$this->ocs->createShare('valid-path', Constants::PERMISSION_ALL, IShare::TYPE_LINK, null, 'true');
@@ -2052,24 +2229,26 @@ class ShareAPIControllerTest extends TestCase {
 
 
 	public function testCreateShareLinkPublicUploadFile(): void {
-		$this->expectException(OCSNotFoundException::class);
+		$this->expectException(OCSBadRequestException::class);
 		$this->expectExceptionMessage('Public upload is only possible for publicly shared folders');
 
-		$path = $this->getMockBuilder(File::class)->getMock();
-		$path->method('getId')->willReturn(42);
 		$storage = $this->createMock(IStorage::class);
 		$storage->method('instanceOfStorage')
 			->willReturnMap([
 				['OCA\Files_Sharing\External\Storage', false],
 				['OCA\Files_Sharing\SharedStorage', false],
 			]);
-		$path->method('getStorage')->willReturn($storage);
+
+		$file = $this->createMock(File::class);
+		$file->method('getId')->willReturn(42);
+		$file->method('getStorage')->willReturn($storage);
+
 		$this->rootFolder->method('getUserFolder')->with($this->currentUser)->willReturnSelf();
-		$this->rootFolder->method('get')->with('valid-path')->willReturn($path);
+		$this->rootFolder->method('get')->with('valid-path')->willReturn($file);
 		$this->rootFolder->method('getById')
 			->willReturn([]);
 
-		$this->shareManager->method('newShare')->willReturn(\OC::$server->getShareManager()->newShare());
+		$this->shareManager->method('newShare')->willReturn(Server::get(IManager::class)->newShare());
 		$this->shareManager->method('shareApiAllowLinks')->willReturn(true);
 		$this->shareManager->method('shareApiLinkAllowPublicUpload')->willReturn(true);
 
@@ -2093,18 +2272,18 @@ class ShareAPIControllerTest extends TestCase {
 		$this->rootFolder->method('getById')
 			->willReturn([]);
 
-		$this->shareManager->method('newShare')->willReturn(\OC::$server->getShareManager()->newShare());
+		$this->shareManager->method('newShare')->willReturn(Server::get(IManager::class)->newShare());
 		$this->shareManager->method('shareApiAllowLinks')->willReturn(true);
 		$this->shareManager->method('shareApiLinkAllowPublicUpload')->willReturn(true);
 
 		$this->shareManager->expects($this->once())->method('createShare')->with(
 			$this->callback(function (IShare $share) use ($path) {
-				return $share->getNode() === $path &&
-					$share->getShareType() === IShare::TYPE_LINK &&
-					$share->getPermissions() === (Constants::PERMISSION_READ | Constants::PERMISSION_CREATE | Constants::PERMISSION_UPDATE | Constants::PERMISSION_DELETE) &&
-					$share->getSharedBy() === 'currentUser' &&
-					$share->getPassword() === null &&
-					$share->getExpirationDate() === null;
+				return $share->getNode() === $path
+					&& $share->getShareType() === IShare::TYPE_LINK
+					&& $share->getPermissions() === (Constants::PERMISSION_READ | Constants::PERMISSION_CREATE | Constants::PERMISSION_UPDATE | Constants::PERMISSION_DELETE)
+					&& $share->getSharedBy() === 'currentUser'
+					&& $share->getPassword() === null
+					&& $share->getExpirationDate() === null;
 			})
 		)->willReturnArgument(0);
 
@@ -2132,23 +2311,23 @@ class ShareAPIControllerTest extends TestCase {
 		$this->rootFolder->method('getById')
 			->willReturn([]);
 
-		$this->shareManager->method('newShare')->willReturn(\OC::$server->getShareManager()->newShare());
+		$this->shareManager->method('newShare')->willReturn(Server::get(IManager::class)->newShare());
 		$this->shareManager->method('shareApiAllowLinks')->willReturn(true);
 		$this->shareManager->method('shareApiLinkAllowPublicUpload')->willReturn(true);
 
 		$this->shareManager->expects($this->once())->method('createShare')->with(
 			$this->callback(function (IShare $share) use ($path) {
-				return $share->getNode() === $path &&
-				$share->getShareType() === IShare::TYPE_LINK &&
-				$share->getPermissions() === Constants::PERMISSION_ALL &&
-				$share->getSharedBy() === 'currentUser' &&
-				$share->getPassword() === 'password' &&
-				$share->getExpirationDate() === null;
+				return $share->getNode() === $path
+				&& $share->getShareType() === IShare::TYPE_LINK
+				&& $share->getPermissions() === Constants::PERMISSION_READ // publicUpload was set to false
+				&& $share->getSharedBy() === 'currentUser'
+				&& $share->getPassword() === 'password'
+				&& $share->getExpirationDate() === null;
 			})
 		)->willReturnArgument(0);
 
 		$expected = new DataResponse([]);
-		$result = $ocs->createShare('valid-path', Constants::PERMISSION_ALL, IShare::TYPE_LINK, null, 'false', 'password', null, '');
+		$result = $ocs->createShare('valid-path', Constants::PERMISSION_READ, IShare::TYPE_LINK, null, 'false', 'password', null, '');
 
 		$this->assertInstanceOf(get_class($expected), $result);
 		$this->assertEquals($expected->getData(), $result->getData());
@@ -2171,7 +2350,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->rootFolder->method('getById')
 			->willReturn([]);
 
-		$this->shareManager->method('newShare')->willReturn(\OC::$server->getShareManager()->newShare());
+		$this->shareManager->method('newShare')->willReturn(Server::get(IManager::class)->newShare());
 		$this->shareManager->method('shareApiAllowLinks')->willReturn(true);
 		$this->shareManager->method('shareApiLinkAllowPublicUpload')->willReturn(true);
 
@@ -2179,18 +2358,18 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->expects($this->once())->method('createShare')->with(
 			$this->callback(function (IShare $share) use ($path) {
-				return $share->getNode() === $path &&
-				$share->getShareType() === IShare::TYPE_LINK &&
-				$share->getPermissions() === Constants::PERMISSION_ALL &&
-				$share->getSharedBy() === 'currentUser' &&
-				$share->getPassword() === 'password' &&
-				$share->getSendPasswordByTalk() === true &&
-				$share->getExpirationDate() === null;
+				return $share->getNode() === $path
+				&& $share->getShareType() === IShare::TYPE_LINK
+				&& $share->getPermissions() === (Constants::PERMISSION_ALL & ~(Constants::PERMISSION_SHARE))
+				&& $share->getSharedBy() === 'currentUser'
+				&& $share->getPassword() === 'password'
+				&& $share->getSendPasswordByTalk() === true
+				&& $share->getExpirationDate() === null;
 			})
 		)->willReturnArgument(0);
 
 		$expected = new DataResponse([]);
-		$result = $ocs->createShare('valid-path', Constants::PERMISSION_ALL, IShare::TYPE_LINK, null, 'false', 'password', 'true', '');
+		$result = $ocs->createShare('valid-path', Constants::PERMISSION_ALL, IShare::TYPE_LINK, null, 'true', 'password', 'true', '');
 
 		$this->assertInstanceOf(get_class($expected), $result);
 		$this->assertEquals($expected->getData(), $result->getData());
@@ -2218,7 +2397,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->rootFolder->method('getById')
 			->willReturn([]);
 
-		$this->shareManager->method('newShare')->willReturn(\OC::$server->getShareManager()->newShare());
+		$this->shareManager->method('newShare')->willReturn(Server::get(IManager::class)->newShare());
 		$this->shareManager->method('shareApiAllowLinks')->willReturn(true);
 		$this->shareManager->method('shareApiLinkAllowPublicUpload')->willReturn(true);
 
@@ -2256,7 +2435,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->rootFolder->method('getById')
 			->willReturn([]);
 
-		$this->shareManager->method('newShare')->willReturn(\OC::$server->getShareManager()->newShare());
+		$this->shareManager->method('newShare')->willReturn(Server::get(IManager::class)->newShare());
 		$this->shareManager->method('shareApiAllowLinks')->willReturn(true);
 		$this->shareManager->method('shareApiLinkAllowPublicUpload')->willReturn(true);
 
@@ -2265,12 +2444,12 @@ class ShareAPIControllerTest extends TestCase {
 				$date = new \DateTime('2000-01-01');
 				$date->setTime(0, 0, 0);
 
-				return $share->getNode() === $path &&
-				$share->getShareType() === IShare::TYPE_LINK &&
-				$share->getPermissions() === Constants::PERMISSION_READ | Constants::PERMISSION_SHARE &&
-				$share->getSharedBy() === 'currentUser' &&
-				$share->getPassword() === null &&
-				$share->getExpirationDate() == $date;
+				return $share->getNode() === $path
+				&& $share->getShareType() === IShare::TYPE_LINK
+				&& $share->getPermissions() === Constants::PERMISSION_READ | Constants::PERMISSION_SHARE
+				&& $share->getSharedBy() === 'currentUser'
+				&& $share->getPassword() === null
+				&& $share->getExpirationDate() == $date;
 			})
 		)->willReturnArgument(0);
 
@@ -2302,7 +2481,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->rootFolder->method('getById')
 			->willReturn([]);
 
-		$this->shareManager->method('newShare')->willReturn(\OC::$server->getShareManager()->newShare());
+		$this->shareManager->method('newShare')->willReturn(Server::get(IManager::class)->newShare());
 		$this->shareManager->method('shareApiAllowLinks')->willReturn(true);
 		$this->shareManager->method('shareApiLinkAllowPublicUpload')->willReturn(true);
 
@@ -2325,6 +2504,7 @@ class ShareAPIControllerTest extends TestCase {
 				$this->urlGenerator,
 				$this->l,
 				$this->config,
+				$this->appConfig,
 				$this->appManager,
 				$this->serverContainer,
 				$this->userStatusManager,
@@ -2333,8 +2513,11 @@ class ShareAPIControllerTest extends TestCase {
 				$this->logger,
 				$this->factory,
 				$this->mailer,
+				$this->tagManager,
+				$this->getEmailValidatorWithStrictEmailCheck(),
+				$this->trustedServers,
 				$this->currentUser,
-			])->setMethods(['formatShare'])
+			])->onlyMethods(['formatShare'])
 			->getMock();
 
 		[$userFolder, $path] = $this->getNonSharedUserFile();
@@ -2358,15 +2541,15 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->method('createShare')
 			->with($this->callback(function (IShare $share) use ($path) {
-				return $share->getNode() === $path &&
-					$share->getPermissions() === (
-						Constants::PERMISSION_ALL &
-						~Constants::PERMISSION_DELETE &
-						~Constants::PERMISSION_CREATE
-					) &&
-					$share->getShareType() === IShare::TYPE_REMOTE &&
-					$share->getSharedWith() === 'user@example.org' &&
-					$share->getSharedBy() === 'currentUser';
+				return $share->getNode() === $path
+					&& $share->getPermissions() === (
+						Constants::PERMISSION_ALL
+						& ~Constants::PERMISSION_DELETE
+						& ~Constants::PERMISSION_CREATE
+					)
+					&& $share->getShareType() === IShare::TYPE_REMOTE
+					&& $share->getSharedWith() === 'user@example.org'
+					&& $share->getSharedBy() === 'currentUser';
 			}))
 			->willReturnArgument(0);
 
@@ -2395,6 +2578,7 @@ class ShareAPIControllerTest extends TestCase {
 				$this->urlGenerator,
 				$this->l,
 				$this->config,
+				$this->appConfig,
 				$this->appManager,
 				$this->serverContainer,
 				$this->userStatusManager,
@@ -2403,8 +2587,11 @@ class ShareAPIControllerTest extends TestCase {
 				$this->logger,
 				$this->factory,
 				$this->mailer,
+				$this->tagManager,
+				$this->getEmailValidatorWithStrictEmailCheck(),
+				$this->trustedServers,
 				$this->currentUser,
-			])->setMethods(['formatShare'])
+			])->onlyMethods(['formatShare'])
 			->getMock();
 
 		[$userFolder, $path] = $this->getNonSharedUserFile();
@@ -2428,15 +2615,15 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->method('createShare')
 			->with($this->callback(function (IShare $share) use ($path) {
-				return $share->getNode() === $path &&
-					$share->getPermissions() === (
-						Constants::PERMISSION_ALL &
-						~Constants::PERMISSION_DELETE &
-						~Constants::PERMISSION_CREATE
-					) &&
-					$share->getShareType() === IShare::TYPE_REMOTE_GROUP &&
-					$share->getSharedWith() === 'group@example.org' &&
-					$share->getSharedBy() === 'currentUser';
+				return $share->getNode() === $path
+					&& $share->getPermissions() === (
+						Constants::PERMISSION_ALL
+						& ~Constants::PERMISSION_DELETE
+						& ~Constants::PERMISSION_CREATE
+					)
+					&& $share->getShareType() === IShare::TYPE_REMOTE_GROUP
+					&& $share->getSharedWith() === 'group@example.org'
+					&& $share->getSharedBy() === 'currentUser';
 			}))
 			->willReturnArgument(0);
 
@@ -2476,25 +2663,24 @@ class ShareAPIControllerTest extends TestCase {
 			->with('spreed')
 			->willReturn(true);
 
-		$helper = $this->getMockBuilder('\OCA\Talk\Share\Helper\ShareAPIController')
-			->setMethods(['createShare'])
+		// This is not possible anymore with PHPUnit 10+
+		// as `setMethods` was removed and now real reflection is used, thus the class needs to exist.
+		// $helper = $this->getMockBuilder('\OCA\Talk\Share\Helper\ShareAPIController')
+		$helper = $this->getMockBuilder(\stdClass::class)
+			->addMethods(['createShare'])
 			->getMock();
 		$helper->method('createShare')
 			->with(
 				$share,
 				'recipientRoom',
-				Constants::PERMISSION_ALL &
-				~Constants::PERMISSION_DELETE &
-				~Constants::PERMISSION_CREATE,
+				Constants::PERMISSION_ALL
+				& ~Constants::PERMISSION_DELETE
+				& ~Constants::PERMISSION_CREATE,
 				''
 			)->willReturnCallback(
 				function ($share): void {
 					$share->setSharedWith('recipientRoom');
-					$share->setPermissions(
-						Constants::PERMISSION_ALL &
-						~Constants::PERMISSION_DELETE &
-						~Constants::PERMISSION_CREATE
-					);
+					$share->setPermissions(Constants::PERMISSION_ALL);
 				}
 			);
 
@@ -2504,15 +2690,11 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->method('createShare')
 			->with($this->callback(function (IShare $share) use ($path) {
-				return $share->getNode() === $path &&
-					$share->getPermissions() === (
-						Constants::PERMISSION_ALL &
-						~Constants::PERMISSION_DELETE &
-						~Constants::PERMISSION_CREATE
-					) &&
-					$share->getShareType() === IShare::TYPE_ROOM &&
-					$share->getSharedWith() === 'recipientRoom' &&
-					$share->getSharedBy() === 'currentUser';
+				return $share->getNode() === $path
+					&& $share->getPermissions() === Constants::PERMISSION_ALL
+					&& $share->getShareType() === IShare::TYPE_ROOM
+					&& $share->getSharedWith() === 'recipientRoom'
+					&& $share->getSharedBy() === 'currentUser';
 			}))
 			->willReturnArgument(0);
 
@@ -2534,8 +2716,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->shareManager->method('newShare')->willReturn($share);
 
 		[$userFolder, $path] = $this->getNonSharedUserFolder();
-		$this->rootFolder->expects($this->exactly(2))
-			->method('getUserFolder')
+		$this->rootFolder->method('getUserFolder')
 			->with('currentUser')
 			->willReturn($userFolder);
 
@@ -2572,8 +2753,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->shareManager->method('newShare')->willReturn($share);
 
 		[$userFolder, $path] = $this->getNonSharedUserFile();
-		$this->rootFolder->expects($this->exactly(2))
-			->method('getUserFolder')
+		$this->rootFolder->method('getUserFolder')
 			->with('currentUser')
 			->willReturn($userFolder);
 
@@ -2592,16 +2772,17 @@ class ShareAPIControllerTest extends TestCase {
 			->with('spreed')
 			->willReturn(true);
 
-		$helper = $this->getMockBuilder('\OCA\Talk\Share\Helper\ShareAPIController')
-			->setMethods(['createShare'])
+		// This is not possible anymore with PHPUnit 10+
+		// as `setMethods` was removed and now real reflection is used, thus the class needs to exist.
+		// $helper = $this->getMockBuilder('\OCA\Talk\Share\Helper\ShareAPIController')
+		$helper = $this->getMockBuilder(\stdClass::class)
+			->addMethods(['createShare'])
 			->getMock();
 		$helper->method('createShare')
 			->with(
 				$share,
 				'recipientRoom',
-				Constants::PERMISSION_ALL &
-				~Constants::PERMISSION_DELETE &
-				~Constants::PERMISSION_CREATE,
+				Constants::PERMISSION_ALL & ~(Constants::PERMISSION_CREATE | Constants::PERMISSION_DELETE),
 				''
 			)->willReturnCallback(
 				function ($share): void {
@@ -2623,10 +2804,10 @@ class ShareAPIControllerTest extends TestCase {
 	 * TODO: Remove once proper solution is in place
 	 */
 	public function testCreateReshareOfFederatedMountNoDeletePermissions(): void {
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$this->shareManager->method('newShare')->willReturn($share);
 
-		/** @var ShareAPIController|\PHPUnit\Framework\MockObject\MockObject $ocs */
+		/** @var ShareAPIController&MockObject $ocs */
 		$ocs = $this->getMockBuilder(ShareAPIController::class)
 			->setConstructorArgs([
 				$this->appName,
@@ -2638,6 +2819,7 @@ class ShareAPIControllerTest extends TestCase {
 				$this->urlGenerator,
 				$this->l,
 				$this->config,
+				$this->appConfig,
 				$this->appManager,
 				$this->serverContainer,
 				$this->userStatusManager,
@@ -2646,8 +2828,11 @@ class ShareAPIControllerTest extends TestCase {
 				$this->logger,
 				$this->factory,
 				$this->mailer,
+				$this->tagManager,
+				$this->getEmailValidatorWithStrictEmailCheck(),
+				$this->trustedServers,
 				$this->currentUser,
-			])->setMethods(['formatShare'])
+			])->onlyMethods(['formatShare'])
 			->getMock();
 
 		$userFolder = $this->getMockBuilder(Folder::class)->getMock();
@@ -2708,9 +2893,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with($share->getNodeId())
-			->willReturn($share->getNode());
+			->willReturn([$share->getNode()]);
 
 		$this->ocs->updateShare(42);
 	}
@@ -2783,14 +2968,14 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->expects($this->once())->method('updateShare')->with(
 			$this->callback(function (IShare $share) {
-				return $share->getPermissions() === Constants::PERMISSION_READ &&
-				$share->getPassword() === null &&
-				$share->getExpirationDate() === null &&
+				return $share->getPermissions() === Constants::PERMISSION_READ
+				&& $share->getPassword() === null
+				&& $share->getExpirationDate() === null
 				// Once set a note or a label are never back to null, only to an
 				// empty string.
-				$share->getNote() === '' &&
-				$share->getLabel() === '' &&
-				$share->getHideDownload() === false;
+				&& $share->getNote() === ''
+				&& $share->getLabel() === ''
+				&& $share->getHideDownload() === false;
 			})
 		)->willReturnArgument(0);
 
@@ -2801,6 +2986,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
+		$userFolder->method('getById')
+			->with(42)
+			->willReturn([$node]);
 		$userFolder->method('getFirstNodeById')
 			->with(42)
 			->willReturn($node);
@@ -2825,7 +3013,7 @@ class ShareAPIControllerTest extends TestCase {
 		$folder->method('getId')
 			->willReturn(42);
 
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$share->setPermissions(Constants::PERMISSION_ALL)
 			->setSharedBy($this->currentUser)
 			->setShareType(IShare::TYPE_LINK)
@@ -2839,12 +3027,12 @@ class ShareAPIControllerTest extends TestCase {
 				$date = new \DateTime('2000-01-01');
 				$date->setTime(0, 0, 0);
 
-				return $share->getPermissions() === (Constants::PERMISSION_READ | Constants::PERMISSION_CREATE | Constants::PERMISSION_UPDATE | Constants::PERMISSION_DELETE) &&
-				$share->getPassword() === 'password' &&
-				$share->getExpirationDate() == $date &&
-				$share->getNote() === 'note' &&
-				$share->getLabel() === 'label' &&
-				$share->getHideDownload() === true;
+				return $share->getPermissions() === (Constants::PERMISSION_READ | Constants::PERMISSION_CREATE | Constants::PERMISSION_UPDATE | Constants::PERMISSION_DELETE)
+				&& $share->getPassword() === 'password'
+				&& $share->getExpirationDate() == $date
+				&& $share->getNote() === 'note'
+				&& $share->getLabel() === 'label'
+				&& $share->getHideDownload() === true;
 			})
 		)->willReturnArgument(0);
 
@@ -2855,9 +3043,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($folder);
+			->willReturn([$folder]);
 
 		$mountPoint = $this->createMock(IMountPoint::class);
 		$folder->method('getMountPoint')
@@ -2872,9 +3060,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->assertEquals($expected->getData(), $result->getData());
 	}
 
-	/**
-	 * @dataProvider publicUploadParamsProvider
-	 */
+	#[DataProvider(methodName: 'publicUploadParamsProvider')]
 	public function testUpdateLinkShareEnablePublicUpload($permissions, $publicUpload, $expireDate, $password): void {
 		$ocs = $this->mockFormatShare();
 
@@ -2882,7 +3068,7 @@ class ShareAPIControllerTest extends TestCase {
 		$folder->method('getId')
 			->willReturn(42);
 
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$share->setPermissions(Constants::PERMISSION_ALL)
 			->setSharedBy($this->currentUser)
 			->setShareType(IShare::TYPE_LINK)
@@ -2895,9 +3081,9 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->expects($this->once())->method('updateShare')->with(
 			$this->callback(function (IShare $share) {
-				return $share->getPermissions() === (Constants::PERMISSION_READ | Constants::PERMISSION_CREATE | Constants::PERMISSION_UPDATE | Constants::PERMISSION_DELETE) &&
-				$share->getPassword() === 'password' &&
-				$share->getExpirationDate() === null;
+				return $share->getPermissions() === (Constants::PERMISSION_READ | Constants::PERMISSION_CREATE | Constants::PERMISSION_UPDATE | Constants::PERMISSION_DELETE)
+				&& $share->getPassword() === 'password'
+				&& $share->getExpirationDate() === null;
 			})
 		)->willReturnArgument(0);
 
@@ -2905,9 +3091,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($folder);
+			->willReturn([$folder]);
 
 		$mountPoint = $this->createMock(IMountPoint::class);
 		$folder->method('getMountPoint')
@@ -2923,7 +3109,7 @@ class ShareAPIControllerTest extends TestCase {
 	}
 
 
-	public function publicLinkValidPermissionsProvider() {
+	public static function publicLinkValidPermissionsProvider() {
 		return [
 			[Constants::PERMISSION_CREATE],
 			[Constants::PERMISSION_READ],
@@ -2933,9 +3119,7 @@ class ShareAPIControllerTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider publicLinkValidPermissionsProvider
-	 */
+	#[DataProvider(methodName: 'publicLinkValidPermissionsProvider')]
 	public function testUpdateLinkShareSetCRUDPermissions($permissions): void {
 		$ocs = $this->mockFormatShare();
 
@@ -2943,7 +3127,7 @@ class ShareAPIControllerTest extends TestCase {
 		$folder->method('getId')
 			->willReturn(42);
 
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$share->setPermissions(Constants::PERMISSION_ALL)
 			->setSharedBy($this->currentUser)
 			->setShareType(IShare::TYPE_LINK)
@@ -2963,9 +3147,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($folder);
+			->willReturn([$folder]);
 
 		$mountPoint = $this->createMock(IMountPoint::class);
 		$folder->method('getMountPoint')
@@ -2974,13 +3158,13 @@ class ShareAPIControllerTest extends TestCase {
 			->willReturn(42);
 
 		$expected = new DataResponse([]);
-		$result = $ocs->updateShare(42, $permissions, 'password', null, 'true', null);
+		$result = $ocs->updateShare(42, $permissions, 'password', null, null, null);
 
 		$this->assertInstanceOf(get_class($expected), $result);
 		$this->assertEquals($expected->getData(), $result->getData());
 	}
 
-	public function publicLinkInvalidPermissionsProvider1() {
+	public static function publicLinkInvalidPermissionsProvider1() {
 		return [
 			[Constants::PERMISSION_DELETE],
 			[Constants::PERMISSION_UPDATE],
@@ -2988,26 +3172,22 @@ class ShareAPIControllerTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider publicLinkInvalidPermissionsProvider1
-	 */
+	#[DataProvider(methodName: 'publicLinkInvalidPermissionsProvider1')]
 	public function testUpdateLinkShareSetInvalidCRUDPermissions1($permissions): void {
 		$this->expectException(OCSBadRequestException::class);
 		$this->expectExceptionMessage('Share must at least have READ or CREATE permissions');
 
-		$this->testUpdateLinkShareSetCRUDPermissions($permissions);
+		$this->testUpdateLinkShareSetCRUDPermissions($permissions, null);
 	}
 
-	public function publicLinkInvalidPermissionsProvider2() {
+	public static function publicLinkInvalidPermissionsProvider2() {
 		return [
 			[Constants::PERMISSION_CREATE | Constants::PERMISSION_DELETE],
 			[Constants::PERMISSION_CREATE | Constants::PERMISSION_UPDATE],
 		];
 	}
 
-	/**
-	 * @dataProvider publicLinkInvalidPermissionsProvider2
-	 */
+	#[DataProvider(methodName: 'publicLinkInvalidPermissionsProvider2')]
 	public function testUpdateLinkShareSetInvalidCRUDPermissions2($permissions): void {
 		$this->expectException(OCSBadRequestException::class);
 		$this->expectExceptionMessage('Share must have READ permission if UPDATE or DELETE permission is set');
@@ -3021,9 +3201,9 @@ class ShareAPIControllerTest extends TestCase {
 
 		$ocs = $this->mockFormatShare();
 		[$userFolder, $folder] = $this->getNonSharedUserFolder();
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($folder);
+			->willReturn([$folder]);
 		$this->rootFolder->method('getUserFolder')
 			->with($this->currentUser)
 			->willReturn($userFolder);
@@ -3031,7 +3211,7 @@ class ShareAPIControllerTest extends TestCase {
 		$folder->method('getId')
 			->willReturn(42);
 
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$share->setPermissions(Constants::PERMISSION_ALL)
 			->setSharedBy($this->currentUser)
 			->setShareType(IShare::TYPE_LINK)
@@ -3043,7 +3223,7 @@ class ShareAPIControllerTest extends TestCase {
 		$ocs->updateShare(42, null, 'password', null, 'true', '2000-01-a');
 	}
 
-	public function publicUploadParamsProvider() {
+	public static function publicUploadParamsProvider() {
 		return [
 			[null, 'true', null, 'password'],
 			// legacy had no delete
@@ -3059,25 +3239,23 @@ class ShareAPIControllerTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider publicUploadParamsProvider
-	 */
+	#[DataProvider(methodName: 'publicUploadParamsProvider')]
 	public function testUpdateLinkSharePublicUploadNotAllowed($permissions, $publicUpload, $expireDate, $password): void {
 		$this->expectException(OCSForbiddenException::class);
 		$this->expectExceptionMessage('Public upload disabled by the administrator');
 
 		$ocs = $this->mockFormatShare();
 		[$userFolder, $folder] = $this->getNonSharedUserFolder();
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($folder);
+			->willReturn([$folder]);
 		$this->rootFolder->method('getUserFolder')
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
 		$folder->method('getId')->willReturn(42);
 
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$share->setPermissions(Constants::PERMISSION_ALL)
 			->setSharedBy($this->currentUser)
 			->setShareType(IShare::TYPE_LINK)
@@ -3100,21 +3278,30 @@ class ShareAPIControllerTest extends TestCase {
 		$file->method('getId')
 			->willReturn(42);
 		[$userFolder, $folder] = $this->getNonSharedUserFolder();
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($folder);
+			->willReturn([$folder]);
 		$this->rootFolder->method('getUserFolder')
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$share->setPermissions(Constants::PERMISSION_ALL)
 			->setSharedBy($this->currentUser)
 			->setShareType(IShare::TYPE_LINK)
 			->setNode($file);
 
-		$this->shareManager->method('getShareById')->with('ocinternal:42')->willReturn($share);
-		$this->shareManager->method('shareApiLinkAllowPublicUpload')->willReturn(true);
+		$this->shareManager
+			->method('getShareById')
+			->with('ocinternal:42')
+			->willReturn($share);
+		$this->shareManager
+			->method('shareApiLinkAllowPublicUpload')
+			->willReturn(true);
+		$this->shareManager
+			->method('updateShare')
+			->with($share)
+			->willThrowException(new \InvalidArgumentException('File shares cannot have create or delete permissions'));
 
 		$ocs->updateShare(42, null, 'password', null, 'true', '');
 	}
@@ -3127,9 +3314,9 @@ class ShareAPIControllerTest extends TestCase {
 
 		[$userFolder, $node] = $this->getNonSharedUserFolder();
 		$node->method('getId')->willReturn(42);
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($node);
+			->willReturn([$node]);
 		$this->rootFolder->method('getUserFolder')
 			->with($this->currentUser)
 			->willReturn($userFolder);
@@ -3154,13 +3341,13 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->expects($this->once())->method('updateShare')->with(
 			$this->callback(function (IShare $share) use ($date) {
-				return $share->getPermissions() === Constants::PERMISSION_ALL &&
-				$share->getPassword() === 'newpassword' &&
-				$share->getSendPasswordByTalk() === true &&
-				$share->getExpirationDate() === $date &&
-				$share->getNote() === 'note' &&
-				$share->getLabel() === 'label' &&
-				$share->getHideDownload() === true;
+				return $share->getPermissions() === Constants::PERMISSION_ALL
+				&& $share->getPassword() === 'newpassword'
+				&& $share->getSendPasswordByTalk() === true
+				&& $share->getExpirationDate() === $date
+				&& $share->getNote() === 'note'
+				&& $share->getLabel() === 'label'
+				&& $share->getHideDownload() === true;
 			})
 		)->willReturnArgument(0);
 
@@ -3178,9 +3365,9 @@ class ShareAPIControllerTest extends TestCase {
 		$date->setTime(0, 0, 0);
 
 		[$userFolder, $node] = $this->getNonSharedUserFolder();
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($node);
+			->willReturn([$node]);
 		$this->rootFolder->method('getUserFolder')
 			->with($this->currentUser)
 			->willReturn($userFolder);
@@ -3208,13 +3395,13 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->expects($this->once())->method('updateShare')->with(
 			$this->callback(function (IShare $share) use ($date) {
-				return $share->getPermissions() === Constants::PERMISSION_ALL &&
-				$share->getPassword() === 'password' &&
-				$share->getSendPasswordByTalk() === true &&
-				$share->getExpirationDate() === $date &&
-				$share->getNote() === 'note' &&
-				$share->getLabel() === 'label' &&
-				$share->getHideDownload() === true;
+				return $share->getPermissions() === Constants::PERMISSION_ALL
+				&& $share->getPassword() === 'password'
+				&& $share->getSendPasswordByTalk() === true
+				&& $share->getExpirationDate() === $date
+				&& $share->getNote() === 'note'
+				&& $share->getLabel() === 'label'
+				&& $share->getHideDownload() === true;
 			})
 		)->willReturnArgument(0);
 
@@ -3236,9 +3423,9 @@ class ShareAPIControllerTest extends TestCase {
 		$date->setTime(0, 0, 0);
 
 		[$userFolder, $node] = $this->getNonSharedUserFolder();
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($node);
+			->willReturn([$node]);
 		$this->rootFolder->method('getUserFolder')
 			->with($this->currentUser)
 			->willReturn($userFolder);
@@ -3276,9 +3463,9 @@ class ShareAPIControllerTest extends TestCase {
 		$date->setTime(0, 0, 0);
 
 		[$userFolder, $node] = $this->getNonSharedUserFolder();
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($node);
+			->willReturn([$node]);
 		$this->rootFolder->method('getUserFolder')
 			->with($this->currentUser)
 			->willReturn($userFolder);
@@ -3306,13 +3493,13 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->expects($this->once())->method('updateShare')->with(
 			$this->callback(function (IShare $share) use ($date) {
-				return $share->getPermissions() === Constants::PERMISSION_ALL &&
-				$share->getPassword() === 'password' &&
-				$share->getSendPasswordByTalk() === false &&
-				$share->getExpirationDate() === $date &&
-				$share->getNote() === 'note' &&
-				$share->getLabel() === 'label' &&
-				$share->getHideDownload() === true;
+				return $share->getPermissions() === Constants::PERMISSION_ALL
+				&& $share->getPassword() === 'password'
+				&& $share->getSendPasswordByTalk() === false
+				&& $share->getExpirationDate() === $date
+				&& $share->getNote() === 'note'
+				&& $share->getLabel() === 'label'
+				&& $share->getHideDownload() === true;
 			})
 		)->willReturnArgument(0);
 
@@ -3356,13 +3543,13 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->expects($this->once())->method('updateShare')->with(
 			$this->callback(function (IShare $share) use ($date) {
-				return $share->getPermissions() === Constants::PERMISSION_ALL &&
-				$share->getPassword() === 'password' &&
-				$share->getSendPasswordByTalk() === false &&
-				$share->getExpirationDate() === $date &&
-				$share->getNote() === 'note' &&
-				$share->getLabel() === 'label' &&
-				$share->getHideDownload() === true;
+				return $share->getPermissions() === Constants::PERMISSION_ALL
+				&& $share->getPassword() === 'password'
+				&& $share->getSendPasswordByTalk() === false
+				&& $share->getExpirationDate() === $date
+				&& $share->getNote() === 'note'
+				&& $share->getLabel() === 'label'
+				&& $share->getHideDownload() === true;
 			})
 		)->willReturnArgument(0);
 
@@ -3370,9 +3557,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($node);
+			->willReturn([$node]);
 
 		$mountPoint = $this->createMock(IMountPoint::class);
 		$node->method('getMountPoint')
@@ -3424,13 +3611,13 @@ class ShareAPIControllerTest extends TestCase {
 				$date = new \DateTime('2010-12-23');
 				$date->setTime(0, 0, 0);
 
-				return $share->getPermissions() === Constants::PERMISSION_ALL &&
-				$share->getPassword() === 'password' &&
-				$share->getSendPasswordByTalk() === true &&
-				$share->getExpirationDate() == $date &&
-				$share->getNote() === 'note' &&
-				$share->getLabel() === 'label' &&
-				$share->getHideDownload() === true;
+				return $share->getPermissions() === Constants::PERMISSION_ALL
+				&& $share->getPassword() === 'password'
+				&& $share->getSendPasswordByTalk() === true
+				&& $share->getExpirationDate() == $date
+				&& $share->getNote() === 'note'
+				&& $share->getLabel() === 'label'
+				&& $share->getHideDownload() === true;
 			})
 		)->willReturnArgument(0);
 
@@ -3438,9 +3625,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($node);
+			->willReturn([$node]);
 
 		$mountPoint = $this->createMock(IMountPoint::class);
 		$node->method('getMountPoint')
@@ -3464,7 +3651,7 @@ class ShareAPIControllerTest extends TestCase {
 		$folder->method('getId')
 			->willReturn(42);
 
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$share->setPermissions(Constants::PERMISSION_ALL)
 			->setSharedBy($this->currentUser)
 			->setShareType(IShare::TYPE_LINK)
@@ -3482,13 +3669,13 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->expects($this->once())->method('updateShare')->with(
 			$this->callback(function (IShare $share) use ($date) {
-				return $share->getPermissions() === (Constants::PERMISSION_READ | Constants::PERMISSION_CREATE | Constants::PERMISSION_UPDATE | Constants::PERMISSION_DELETE) &&
-				$share->getPassword() === 'password' &&
-				$share->getSendPasswordByTalk() === true &&
-				$share->getExpirationDate() === $date &&
-				$share->getNote() === 'note' &&
-				$share->getLabel() === 'label' &&
-				$share->getHideDownload() === true;
+				return $share->getPermissions() === (Constants::PERMISSION_READ | Constants::PERMISSION_CREATE | Constants::PERMISSION_UPDATE | Constants::PERMISSION_DELETE)
+				&& $share->getPassword() === 'password'
+				&& $share->getSendPasswordByTalk() === true
+				&& $share->getExpirationDate() === $date
+				&& $share->getNote() === 'note'
+				&& $share->getLabel() === 'label'
+				&& $share->getHideDownload() === true;
 			})
 		)->willReturnArgument(0);
 
@@ -3499,9 +3686,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($folder);
+			->willReturn([$folder]);
 
 		$mountPoint = $this->createMock(IMountPoint::class);
 		$folder->method('getMountPoint')
@@ -3525,7 +3712,7 @@ class ShareAPIControllerTest extends TestCase {
 		$folder->method('getId')
 			->willReturn(42);
 
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$share->setPermissions(Constants::PERMISSION_ALL)
 			->setSharedBy($this->currentUser)
 			->setShareType(IShare::TYPE_LINK)
@@ -3543,13 +3730,13 @@ class ShareAPIControllerTest extends TestCase {
 
 		$this->shareManager->expects($this->once())->method('updateShare')->with(
 			$this->callback(function (IShare $share) use ($date): bool {
-				return $share->getPermissions() === (Constants::PERMISSION_READ | Constants::PERMISSION_CREATE | Constants::PERMISSION_UPDATE | Constants::PERMISSION_DELETE) &&
-				$share->getPassword() === 'password' &&
-				$share->getSendPasswordByTalk() === true &&
-				$share->getExpirationDate() === $date &&
-				$share->getNote() === 'note' &&
-				$share->getLabel() === 'label' &&
-				$share->getHideDownload() === true;
+				return $share->getPermissions() === (Constants::PERMISSION_READ | Constants::PERMISSION_CREATE | Constants::PERMISSION_UPDATE | Constants::PERMISSION_DELETE)
+				&& $share->getPassword() === 'password'
+				&& $share->getSendPasswordByTalk() === true
+				&& $share->getExpirationDate() === $date
+				&& $share->getNote() === 'note'
+				&& $share->getLabel() === 'label'
+				&& $share->getHideDownload() === true;
 			})
 		)->willReturnArgument(0);
 
@@ -3559,9 +3746,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($folder);
+			->willReturn([$folder]);
 
 		$mountPoint = $this->createMock(IMountPoint::class);
 		$folder->method('getMountPoint')
@@ -3585,7 +3772,7 @@ class ShareAPIControllerTest extends TestCase {
 		$folder->method('getId')
 			->willReturn(42);
 
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$share->setPermissions(Constants::PERMISSION_ALL)
 			->setSharedBy($this->currentUser)
 			->setShareType(IShare::TYPE_LINK)
@@ -3601,25 +3788,27 @@ class ShareAPIControllerTest extends TestCase {
 		$this->shareManager->method('getShareById')->with('ocinternal:42')->willReturn($share);
 		$this->shareManager->method('shareApiLinkAllowPublicUpload')->willReturn(true);
 
-		$this->shareManager->expects($this->once())->method('updateShare')->with(
-			$this->callback(function (IShare $share) use ($date) {
-				return $share->getPermissions() === (Constants::PERMISSION_READ | Constants::PERMISSION_CREATE | Constants::PERMISSION_UPDATE | Constants::PERMISSION_DELETE) &&
-					$share->getPassword() === 'password' &&
-					$share->getSendPasswordByTalk() === true &&
-					$share->getExpirationDate() === $date &&
-					$share->getNote() === 'note' &&
-					$share->getLabel() === 'label' &&
-					$share->getHideDownload() === true;
-			})
-		)->willReturnArgument(0);
+		$this->shareManager->expects($this->once())
+			->method('updateShare')
+			->with(
+				$this->callback(function (IShare $share) use ($date) {
+					return $share->getPermissions() === Constants::PERMISSION_ALL
+						&& $share->getPassword() === 'password'
+						&& $share->getSendPasswordByTalk() === true
+						&& $share->getExpirationDate() === $date
+						&& $share->getNote() === 'note'
+						&& $share->getLabel() === 'label'
+						&& $share->getHideDownload() === true;
+				})
+			)->willReturnArgument(0);
 
 		$this->rootFolder->method('getUserFolder')
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($folder);
+			->willReturn([$folder]);
 
 		$mountPoint = $this->createMock(IMountPoint::class);
 		$folder->method('getMountPoint')
@@ -3630,7 +3819,7 @@ class ShareAPIControllerTest extends TestCase {
 		$this->shareManager->method('getSharedWith')->willReturn([]);
 
 		$expected = new DataResponse([]);
-		$result = $ocs->updateShare(42, 31, null, null, null, null, null, null, null);
+		$result = $ocs->updateShare(42, Constants::PERMISSION_ALL, null, null, null, null, null, null, null);
 
 		$this->assertInstanceOf(get_class($expected), $result);
 		$this->assertEquals($expected->getData(), $result->getData());
@@ -3643,7 +3832,7 @@ class ShareAPIControllerTest extends TestCase {
 		$file->method('getId')
 			->willReturn(42);
 
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$share->setPermissions(Constants::PERMISSION_ALL)
 			->setSharedBy($this->currentUser)
 			->setShareType(IShare::TYPE_USER)
@@ -3665,9 +3854,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($file);
+			->willReturn([$file]);
 
 		$mountPoint = $this->createMock(IMountPoint::class);
 		$file->method('getMountPoint')
@@ -3689,7 +3878,7 @@ class ShareAPIControllerTest extends TestCase {
 		$folder->method('getId')
 			->willReturn(42);
 
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$share
 			->setId(42)
 			->setSharedBy($this->currentUser)
@@ -3701,7 +3890,7 @@ class ShareAPIControllerTest extends TestCase {
 
 		// note: updateShare will modify the received instance but getSharedWith will reread from the database,
 		// so their values will be different
-		$incomingShare = \OC::$server->getShareManager()->newShare();
+		$incomingShare = Server::get(IManager::class)->newShare();
 		$incomingShare
 			->setId(42)
 			->setSharedBy($this->currentUser)
@@ -3731,6 +3920,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
+		$userFolder->method('getById')
+			->with(42)
+			->willReturn([$folder]);
 		$userFolder->method('getFirstNodeById')
 			->with(42)
 			->willReturn($folder);
@@ -3761,7 +3953,7 @@ class ShareAPIControllerTest extends TestCase {
 		$folder->method('getId')
 			->willReturn(42);
 
-		$share = \OC::$server->getShareManager()->newShare();
+		$share = Server::get(IManager::class)->newShare();
 		$share
 			->setId(42)
 			->setSharedBy($this->currentUser)
@@ -3773,7 +3965,7 @@ class ShareAPIControllerTest extends TestCase {
 
 		// note: updateShare will modify the received instance but getSharedWith will reread from the database,
 		// so their values will be different
-		$incomingShare = \OC::$server->getShareManager()->newShare();
+		$incomingShare = Server::get(IManager::class)->newShare();
 		$incomingShare
 			->setId(42)
 			->setSharedBy($this->currentUser)
@@ -3801,9 +3993,9 @@ class ShareAPIControllerTest extends TestCase {
 			->with($this->currentUser)
 			->willReturn($userFolder);
 
-		$userFolder->method('getFirstNodeById')
+		$userFolder->method('getById')
 			->with(42)
-			->willReturn($folder);
+			->willReturn([$folder]);
 
 		$mountPoint = $this->createMock(IMountPoint::class);
 		$folder->method('getMountPoint')
@@ -3831,9 +4023,10 @@ class ShareAPIControllerTest extends TestCase {
 			->willReturn($mount);
 
 		$userFolder = $this->createMock(Folder::class);
-		$userFolder
-			->expects($this->exactly(2))
-			->method('getFirstNodeById')
+		$userFolder->method('getById')
+			->with(2)
+			->willReturn([$file]);
+		$userFolder->method('getFirstNodeById')
 			->with(2)
 			->willReturn($file);
 
@@ -3872,81 +4065,47 @@ class ShareAPIControllerTest extends TestCase {
 		$this->assertInstanceOf(DataResponse::class, $result);
 	}
 
-	public function dataFormatShare() {
-		$file = $this->getMockBuilder(File::class)->getMock();
-		$folder = $this->getMockBuilder(Folder::class)->getMock();
-		$parent = $this->getMockBuilder(Folder::class)->getMock();
-		$fileWithPreview = $this->getMockBuilder(File::class)->getMock();
+	public static function dataFormatShare(): array {
+		$owner = ['getDisplayName' => 'ownerDN'];
+		$initiator = ['getDisplayName' => 'initiatorDN'];
+		$recipient = [
+			'getDisplayName' => 'recipientDN',
+			'getSystemEMailAddress' => 'recipient'
+		];
 
-		$file->method('getMimeType')->willReturn('myMimeType');
-		$folder->method('getMimeType')->willReturn('myFolderMimeType');
-		$fileWithPreview->method('getMimeType')->willReturn('mimeWithPreview');
-
-		$mountPoint = $this->createMock(IMountPoint::class);
-		$mountPoint->method('getMountType')->willReturn('');
-		$file->method('getMountPoint')->willReturn($mountPoint);
-		$folder->method('getMountPoint')->willReturn($mountPoint);
-		$fileWithPreview->method('getMountPoint')->willReturn($mountPoint);
-
-		$file->method('getPath')->willReturn('file');
-		$folder->method('getPath')->willReturn('folder');
-		$fileWithPreview->method('getPath')->willReturn('fileWithPreview');
-
-		$parent->method('getId')->willReturn(1);
-		$folder->method('getId')->willReturn(2);
-		$file->method('getId')->willReturn(3);
-		$fileWithPreview->method('getId')->willReturn(4);
-
-		$file->method('getParent')->willReturn($parent);
-		$folder->method('getParent')->willReturn($parent);
-		$fileWithPreview->method('getParent')->willReturn($parent);
-
-		$file->method('getSize')->willReturn(123456);
-		$folder->method('getSize')->willReturn(123456);
-		$fileWithPreview->method('getSize')->willReturn(123456);
-		$file->method('getMTime')->willReturn(1234567890);
-		$folder->method('getMTime')->willReturn(1234567890);
-		$fileWithPreview->method('getMTime')->willReturn(1234567890);
-
-		$cache = $this->getMockBuilder('OCP\Files\Cache\ICache')->getMock();
-		$cache->method('getNumericStorageId')->willReturn(100);
-		$storage = $this->createMock(IStorage::class);
-		$storage->method('getId')->willReturn('storageId');
-		$storage->method('getCache')->willReturn($cache);
-
-		$file->method('getStorage')->willReturn($storage);
-		$folder->method('getStorage')->willReturn($storage);
-		$fileWithPreview->method('getStorage')->willReturn($storage);
-
-
-		$mountPoint = $this->getMockBuilder(IMountPoint::class)->getMock();
-		$mountPoint->method('getMountType')->willReturn('');
-		$file->method('getMountPoint')->willReturn($mountPoint);
-		$folder->method('getMountPoint')->willReturn($mountPoint);
-
-		$owner = $this->getMockBuilder(IUser::class)->getMock();
-		$owner->method('getDisplayName')->willReturn('ownerDN');
-		$initiator = $this->getMockBuilder(IUser::class)->getMock();
-		$initiator->method('getDisplayName')->willReturn('initiatorDN');
-		$recipient = $this->getMockBuilder(IUser::class)->getMock();
-		$recipient->method('getDisplayName')->willReturn('recipientDN');
-		$recipient->method('getSystemEMailAddress')->willReturn('recipient');
-		[$shareAttributes, $shareAttributesReturnJson] = $this->mockShareAttributes();
+		$folder = [
+			'class' => Folder::class,
+			'mimeType' => 'myFolderMimeType',
+			'path' => 'folder',
+			'id' => 2,
+		];
+		$file = [
+			'class' => File::class,
+			'mimeType' => 'myMimeType',
+			'path' => 'file',
+			'id' => 3,
+		];
+		$fileWithPreview = [
+			'class' => File::class,
+			'mimeType' => 'mimeWithPreview',
+			'path' => 'fileWithPreview',
+			'id' => 4,
+		];
 
 		$result = [];
 
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_USER)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setAttributes($shareAttributes)
-			->setNode($file)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setNote('personal note')
-			->setId(42);
+		$share = [
+			'type' => IShare::TYPE_USER,
+			'owner' => 'owner',
+			'sharedWith' => 'recipient',
+			'attributes' => [
+				'scope' => 'permissions',
+				'key' => 'download',
+				'value' => true
+			],
+			'node' => $file,
+			'note' => 'personal note',
+		];
 
 		// User backend down
 		$result[] = [
@@ -3956,7 +4115,6 @@ class ShareAPIControllerTest extends TestCase {
 				'uid_owner' => 'initiator',
 				'displayname_owner' => 'initiator',
 				'permissions' => 1,
-				'attributes' => $shareAttributesReturnJson,
 				'stime' => 946684862,
 				'parent' => null,
 				'expiration' => null,
@@ -3988,7 +4146,9 @@ class ShareAPIControllerTest extends TestCase {
 				'mount-type' => '',
 				'attributes' => '[{"scope":"permissions","key":"download","value":true}]',
 				'item_permissions' => 1,
-			], $share, [], false
+			],
+			$share,
+			[], false
 		];
 		// User backend up
 		$result[] = [
@@ -3998,7 +4158,6 @@ class ShareAPIControllerTest extends TestCase {
 				'uid_owner' => 'initiator',
 				'displayname_owner' => 'initiatorDN',
 				'permissions' => 1,
-				'attributes' => $shareAttributesReturnJson,
 				'stime' => 946684862,
 				'parent' => null,
 				'expiration' => null,
@@ -4037,17 +4196,15 @@ class ShareAPIControllerTest extends TestCase {
 			], false
 		];
 
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_USER)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setNote('personal note')
-			->setId(42);
+		// Same but no attributes
+		$share = [
+			'type' => IShare::TYPE_USER,
+			'owner' => 'owner',
+			'sharedWith' => 'recipient',
+			'node' => $file,
+			'note' => 'personal note',
+		];
+
 		// User backend down
 		$result[] = [
 			[
@@ -4091,17 +4248,8 @@ class ShareAPIControllerTest extends TestCase {
 			], $share, [], false
 		];
 
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_USER)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('currentUser')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setNote('personal note')
-			->setId(42);
+		$share['owner'] = 'currentUser';
+
 		// User backend down
 		$result[] = [
 			[
@@ -4146,18 +4294,13 @@ class ShareAPIControllerTest extends TestCase {
 		];
 
 		// with existing group
-
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_GROUP)
-			->setSharedWith('recipientGroup')
-			->setSharedBy('initiator')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setNote('personal note')
-			->setId(42);
+		$share = [
+			'type' => IShare::TYPE_GROUP,
+			'owner' => 'owner',
+			'sharedWith' => 'recipientGroup',
+			'node' => $file,
+			'note' => 'personal note',
+		];
 
 		$result[] = [
 			[
@@ -4201,17 +4344,8 @@ class ShareAPIControllerTest extends TestCase {
 		];
 
 		// with unknown group / no group backend
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_GROUP)
-			->setSharedWith('recipientGroup2')
-			->setSharedBy('initiator')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setNote('personal note')
-			->setId(42);
+		$share['sharedWith'] = 'recipientGroup2';
+
 		$result[] = [
 			[
 				'id' => '42',
@@ -4252,20 +4386,16 @@ class ShareAPIControllerTest extends TestCase {
 			], $share, [], false
 		];
 
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_LINK)
-			->setSharedBy('initiator')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setPassword('mypassword')
-			->setExpirationDate(new \DateTime('2001-01-02T00:00:00'))
-			->setToken('myToken')
-			->setNote('personal note')
-			->setLabel('new link share')
-			->setId(42);
+		$share = [
+			'type' => IShare::TYPE_LINK,
+			'owner' => 'owner',
+			'node' => $file,
+			'note' => 'personal note',
+			'password' => 'mypassword',
+			'expirationDate' => new \DateTime('2001-01-02T00:00:00'),
+			'token' => 'myToken',
+			'label' => 'new link share',
+		];
 
 		$result[] = [
 			[
@@ -4311,21 +4441,7 @@ class ShareAPIControllerTest extends TestCase {
 			], $share, [], false
 		];
 
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_LINK)
-			->setSharedBy('initiator')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setPassword('mypassword')
-			->setSendPasswordByTalk(true)
-			->setExpirationDate(new \DateTime('2001-01-02T00:00:00'))
-			->setToken('myToken')
-			->setNote('personal note')
-			->setLabel('new link share')
-			->setId(42);
+		$share['sendPasswordByTalk'] = true;
 
 		$result[] = [
 			[
@@ -4370,18 +4486,14 @@ class ShareAPIControllerTest extends TestCase {
 			], $share, [], false
 		];
 
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_REMOTE)
-			->setSharedBy('initiator')
-			->setSharedWith('user@server.com')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($folder)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setExpirationDate(new \DateTime('2001-02-03T04:05:06'))
-			->setTarget('myTarget')
-			->setNote('personal note')
-			->setId(42);
+		$share = [
+			'type' => IShare::TYPE_REMOTE,
+			'owner' => 'owner',
+			'sharedWith' => 'user@server.com',
+			'node' => $folder,
+			'note' => 'personal note',
+			'expirationDate' => new \DateTime('2001-02-03T04:05:06'),
+		];
 
 		$result[] = [
 			[
@@ -4392,7 +4504,7 @@ class ShareAPIControllerTest extends TestCase {
 				'permissions' => 1,
 				'stime' => 946684862,
 				'parent' => null,
-				'expiration' => '2001-02-03 00:00:00',
+				'expiration' => '2001-02-03 04:05:06',
 				'token' => null,
 				'uid_file_owner' => 'owner',
 				'displayname_file_owner' => 'owner',
@@ -4420,21 +4532,18 @@ class ShareAPIControllerTest extends TestCase {
 				'mount-type' => '',
 				'attributes' => null,
 				'item_permissions' => 1,
+				'is_trusted_server' => false,
 			], $share, [], false
 		];
 
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_REMOTE_GROUP)
-			->setSharedBy('initiator')
-			->setSharedWith('user@server.com')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($folder)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setExpirationDate(new \DateTime('2001-02-03T04:05:06'))
-			->setTarget('myTarget')
-			->setNote('personal note')
-			->setId(42);
+		$share = [
+			'type' => IShare::TYPE_REMOTE_GROUP,
+			'owner' => 'owner',
+			'sharedWith' => 'user@server.com',
+			'node' => $folder,
+			'note' => 'personal note',
+			'expirationDate' => new \DateTime('2001-02-03T04:05:06'),
+		];
 
 		$result[] = [
 			[
@@ -4445,7 +4554,7 @@ class ShareAPIControllerTest extends TestCase {
 				'permissions' => 1,
 				'stime' => 946684862,
 				'parent' => null,
-				'expiration' => '2001-02-03 00:00:00',
+				'expiration' => '2001-02-03 04:05:06',
 				'token' => null,
 				'uid_file_owner' => 'owner',
 				'displayname_file_owner' => 'owner',
@@ -4473,22 +4582,19 @@ class ShareAPIControllerTest extends TestCase {
 				'mount-type' => '',
 				'attributes' => null,
 				'item_permissions' => 1,
+				'is_trusted_server' => false,
 			], $share, [], false
 		];
 
 		// Circle with id, display name and avatar set by the Circles app
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_CIRCLE)
-			->setSharedBy('initiator')
-			->setSharedWith('Circle (Public circle, circleOwner) [4815162342]')
-			->setSharedWithDisplayName('The display name')
-			->setSharedWithAvatar('path/to/the/avatar')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($folder)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setId(42);
+		$share = [
+			'type' => IShare::TYPE_CIRCLE,
+			'owner' => 'owner',
+			'sharedWith' => 'Circle (Public circle, circleOwner) [4815162342]',
+			'sharedWithDisplayName' => 'The display name',
+			'sharedWithAvatar' => 'path/to/the/avatar',
+			'node' => $folder,
+		];
 
 		$result[] = [
 			[
@@ -4533,16 +4639,12 @@ class ShareAPIControllerTest extends TestCase {
 		];
 
 		// Circle with id set by the Circles app
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_CIRCLE)
-			->setSharedBy('initiator')
-			->setSharedWith('Circle (Public circle, circleOwner) [4815162342]')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($folder)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setId(42);
+		$share = [
+			'type' => IShare::TYPE_CIRCLE,
+			'owner' => 'owner',
+			'sharedWith' => 'Circle (Public circle, circleOwner) [4815162342]',
+			'node' => $folder,
+		];
 
 		$result[] = [
 			[
@@ -4586,16 +4688,12 @@ class ShareAPIControllerTest extends TestCase {
 		];
 
 		// Circle with id not set by the Circles app
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_CIRCLE)
-			->setSharedBy('initiator')
-			->setSharedWith('Circle (Public circle, circleOwner)')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($folder)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setId(42);
+		$share = [
+			'type' => IShare::TYPE_CIRCLE,
+			'owner' => 'owner',
+			'sharedWith' => 'Circle (Public circle, circleOwner)',
+			'node' => $folder,
+		];
 
 		$result[] = [
 			[
@@ -4638,32 +4736,25 @@ class ShareAPIControllerTest extends TestCase {
 			], $share, [], false
 		];
 
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_USER)
-			->setSharedBy('initiator')
-			->setSharedWith('recipient')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setNote('personal note')
-			->setId(42);
+		// No node
+		$share = [
+			'type' => IShare::TYPE_USER,
+			'owner' => 'owner',
+			'sharedWith' => 'recipient',
+			'note' => 'personal note',
+		];
 
 		$result[] = [
 			[], $share, [], true
 		];
 
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_EMAIL)
-			->setSharedBy('initiator')
-			->setSharedWith('user@server.com')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($folder)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setId(42)
-			->setPassword('password');
+		$share = [
+			'type' => IShare::TYPE_EMAIL,
+			'owner' => 'owner',
+			'sharedWith' => 'user@server.com',
+			'node' => $folder,
+			'password' => 'password',
+		];
 
 		$result[] = [
 			[
@@ -4708,18 +4799,7 @@ class ShareAPIControllerTest extends TestCase {
 			], $share, [], false
 		];
 
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_EMAIL)
-			->setSharedBy('initiator')
-			->setSharedWith('user@server.com')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($folder)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setId(42)
-			->setPassword('password')
-			->setSendPasswordByTalk(true);
+		$share['sendPasswordByTalk'] = true;
 
 		$result[] = [
 			[
@@ -4765,17 +4845,13 @@ class ShareAPIControllerTest extends TestCase {
 		];
 
 		// Preview is available
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_USER)
-			->setSharedWith('recipient')
-			->setSharedBy('initiator')
-			->setShareOwner('currentUser')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($fileWithPreview)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setNote('personal note')
-			->setId(42);
+		$share = [
+			'type' => IShare::TYPE_USER,
+			'owner' => 'currentUser',
+			'sharedWith' => 'recipient',
+			'node' => $fileWithPreview,
+			'note' => 'personal note',
+		];
 
 		$result[] = [
 			[
@@ -4821,15 +4897,97 @@ class ShareAPIControllerTest extends TestCase {
 		return $result;
 	}
 
-	/**
-	 * @dataProvider dataFormatShare
-	 *
-	 * @param array $expects
-	 * @param IShare $share
-	 * @param array $users
-	 * @param $exception
-	 */
-	public function testFormatShare(array $expects, IShare $share, array $users, $exception): void {
+	#[DataProvider(methodName: 'dataFormatShare')]
+	public function testFormatShare(
+		array $expects,
+		array $shareParams,
+		array $users,
+		bool $exception,
+	): void {
+		$users = array_map(
+			function ($user) {
+				$mock = $this->createMock(IUser::class);
+				foreach ($user[1] as $method => $return) {
+					$mock->method($method)->willReturn($return);
+				}
+				return [$user[0],$mock];
+			},
+			$users
+		);
+
+		$share = Server::get(IManager::class)->newShare();
+		$share->setShareType($shareParams['type'])
+			->setSharedBy('initiator')
+			->setShareOwner($shareParams['owner'])
+			->setPermissions(Constants::PERMISSION_READ)
+			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
+			->setTarget('myTarget')
+			->setId(42);
+		if (isset($shareParams['sharedWith'])) {
+			$share->setSharedWith($shareParams['sharedWith']);
+		}
+		if (isset($shareParams['sharedWithDisplayName'])) {
+			$share->setSharedWithDisplayName($shareParams['sharedWithDisplayName']);
+		}
+		if (isset($shareParams['sharedWithAvatar'])) {
+			$share->setSharedWithAvatar($shareParams['sharedWithAvatar']);
+		}
+		if (isset($shareParams['attributes'])) {
+			$shareAttributes = $this->createMock(IShareAttributes::class);
+			$shareAttributes->method('toArray')->willReturn($shareParams['attributes']);
+			$shareAttributes->method('getAttribute')->with('permissions', 'download')->willReturn(true);
+			$share->setAttributes($shareAttributes);
+
+			$expects['attributes'] = \json_encode($shareParams['attributes']);
+		}
+		if (isset($shareParams['node'])) {
+			$node = $this->createMock($shareParams['node']['class']);
+
+			$node->method('getMimeType')->willReturn($shareParams['node']['mimeType']);
+
+			$mountPoint = $this->createMock(IMountPoint::class);
+			$mountPoint->method('getMountType')->willReturn('');
+			$node->method('getMountPoint')->willReturn($mountPoint);
+
+			$node->method('getPath')->willReturn($shareParams['node']['path']);
+			$node->method('getId')->willReturn($shareParams['node']['id']);
+
+			$parent = $this->createMock(Folder::class);
+			$parent->method('getId')->willReturn(1);
+			$node->method('getParent')->willReturn($parent);
+
+			$node->method('getSize')->willReturn(123456);
+			$node->method('getMTime')->willReturn(1234567890);
+
+			$cache = $this->createMock(ICache::class);
+			$cache->method('getNumericStorageId')->willReturn(100);
+			$storage = $this->createMock(IStorage::class);
+			$storage->method('getId')->willReturn('storageId');
+			$storage->method('getCache')->willReturn($cache);
+
+			$node->method('getStorage')->willReturn($storage);
+
+			$share->setNode($node);
+		}
+		if (isset($shareParams['note'])) {
+			$share->setNote($shareParams['note']);
+		}
+		if (isset($shareParams['expirationDate'])) {
+			$share->setExpirationDate($shareParams['expirationDate']);
+		}
+		if (isset($shareParams['token'])) {
+			$share->setToken($shareParams['token']);
+		}
+		if (isset($shareParams['label'])) {
+			$share->setLabel($shareParams['label']);
+		}
+		if (isset($shareParams['password'])) {
+			$share->setPassword($shareParams['password']);
+		}
+		if (isset($shareParams['sendPasswordByTalk'])) {
+			$share->setSendPasswordByTalk($shareParams['sendPasswordByTalk']);
+		}
+
 		$this->userManager->method('get')->willReturnMap($users);
 
 		$recipientGroup = $this->createMock(IGroup::class);
@@ -4901,47 +5059,8 @@ class ShareAPIControllerTest extends TestCase {
 		}
 	}
 
-	public function dataFormatRoomShare() {
-		$file = $this->getMockBuilder(File::class)->getMock();
-		$parent = $this->getMockBuilder(Folder::class)->getMock();
-
-		$file->method('getMimeType')->willReturn('myMimeType');
-
-		$file->method('getPath')->willReturn('file');
-
-		$parent->method('getId')->willReturn(1);
-		$file->method('getId')->willReturn(3);
-
-		$file->method('getParent')->willReturn($parent);
-
-		$file->method('getSize')->willReturn(123456);
-		$file->method('getMTime')->willReturn(1234567890);
-
-		$mountPoint = $this->getMockBuilder(IMountPoint::class)->getMock();
-		$mountPoint->method('getMountType')->willReturn('');
-		$file->method('getMountPoint')->willReturn($mountPoint);
-
-		$cache = $this->getMockBuilder('OCP\Files\Cache\ICache')->getMock();
-		$cache->method('getNumericStorageId')->willReturn(100);
-		$storage = $this->createMock(IStorage::class);
-		$storage->method('getId')->willReturn('storageId');
-		$storage->method('getCache')->willReturn($cache);
-
-		$file->method('getStorage')->willReturn($storage);
-
+	public static function dataFormatRoomShare(): array {
 		$result = [];
-
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_ROOM)
-			->setSharedWith('recipientRoom')
-			->setSharedBy('initiator')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setNote('personal note')
-			->setId(42);
 
 		$result[] = [
 			[
@@ -4980,20 +5099,8 @@ class ShareAPIControllerTest extends TestCase {
 				'mount-type' => '',
 				'attributes' => null,
 				'item_permissions' => 1,
-			], $share, false, []
+			], false, []
 		];
-
-		$share = \OC::$server->getShareManager()->newShare();
-		$share->setShareType(IShare::TYPE_ROOM)
-			->setSharedWith('recipientRoom')
-			->setSharedBy('initiator')
-			->setShareOwner('owner')
-			->setPermissions(Constants::PERMISSION_READ)
-			->setNode($file)
-			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
-			->setTarget('myTarget')
-			->setNote('personal note')
-			->setId(42);
 
 		$result[] = [
 			[
@@ -5032,7 +5139,7 @@ class ShareAPIControllerTest extends TestCase {
 				'mount-type' => '',
 				'attributes' => null,
 				'item_permissions' => 9,
-			], $share, true, [
+			], true, [
 				'share_with_displayname' => 'recipientRoomName'
 			]
 		];
@@ -5041,14 +5148,51 @@ class ShareAPIControllerTest extends TestCase {
 	}
 
 	/**
-	 * @dataProvider dataFormatRoomShare
 	 *
 	 * @param array $expects
 	 * @param IShare $share
 	 * @param bool $helperAvailable
 	 * @param array $formatShareByHelper
 	 */
-	public function testFormatRoomShare(array $expects, IShare $share, bool $helperAvailable, array $formatShareByHelper): void {
+	#[DataProvider(methodName: 'dataFormatRoomShare')]
+	public function testFormatRoomShare(array $expects, bool $helperAvailable, array $formatShareByHelper): void {
+		$file = $this->createMock(File::class);
+
+		$file->method('getMimeType')->willReturn('myMimeType');
+		$file->method('getPath')->willReturn('file');
+		$file->method('getId')->willReturn(3);
+
+		$parent = $this->createMock(Folder::class);
+		$parent->method('getId')->willReturn(1);
+		$file->method('getParent')->willReturn($parent);
+
+		$file->method('getSize')->willReturn(123456);
+		$file->method('getMTime')->willReturn(1234567890);
+
+		$mountPoint = $this->createMock(IMountPoint::class);
+		$mountPoint->method('getMountType')->willReturn('');
+		$file->method('getMountPoint')->willReturn($mountPoint);
+
+		$cache = $this->createMock(ICache::class);
+		$cache->method('getNumericStorageId')->willReturn(100);
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('getId')->willReturn('storageId');
+		$storage->method('getCache')->willReturn($cache);
+
+		$file->method('getStorage')->willReturn($storage);
+
+		$share = Server::get(IManager::class)->newShare();
+		$share->setShareType(IShare::TYPE_ROOM)
+			->setSharedWith('recipientRoom')
+			->setSharedBy('initiator')
+			->setShareOwner('owner')
+			->setPermissions(Constants::PERMISSION_READ)
+			->setNode($file)
+			->setShareTime(new \DateTime('2000-01-01T00:01:02'))
+			->setTarget('myTarget')
+			->setNote('personal note')
+			->setId(42);
+
 		$this->rootFolder->method('getUserFolder')
 			->with($this->currentUser)
 			->willReturnSelf();
@@ -5070,8 +5214,11 @@ class ShareAPIControllerTest extends TestCase {
 				->with('spreed')
 				->willReturn(true);
 
-			$helper = $this->getMockBuilder('\OCA\Talk\Share\Helper\ShareAPIController')
-				->setMethods(['formatShare', 'canAccessShare'])
+			// This is not possible anymore with PHPUnit 10+
+			// as `setMethods` was removed and now real reflection is used, thus the class needs to exist.
+			// $helper = $this->getMockBuilder('\OCA\Talk\Share\Helper\ShareAPIController')
+			$helper = $this->getMockBuilder(\stdClass::class)
+				->addMethods(['formatShare', 'canAccessShare'])
 				->getMock();
 			$helper->method('formatShare')
 				->with($share)
@@ -5089,6 +5236,9 @@ class ShareAPIControllerTest extends TestCase {
 		$this->assertEquals($expects, $result);
 	}
 
+	/**
+	 * @return list{Folder, Folder}
+	 */
 	private function getNonSharedUserFolder(): array {
 		$node = $this->getMockBuilder(Folder::class)->getMock();
 		$userFolder = $this->getMockBuilder(Folder::class)->getMock();
@@ -5101,9 +5251,15 @@ class ShareAPIControllerTest extends TestCase {
 		$userFolder->method('getStorage')->willReturn($storage);
 		$node->method('getStorage')->willReturn($storage);
 		$node->method('getId')->willReturn(42);
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn($this->currentUser);
+		$node->method('getOwner')->willReturn($user);
 		return [$userFolder, $node];
 	}
 
+	/**
+	 * @return list{Folder, File}
+	 */
 	private function getNonSharedUserFile(): array {
 		$node = $this->getMockBuilder(File::class)->getMock();
 		$userFolder = $this->getMockBuilder(Folder::class)->getMock();
@@ -5117,5 +5273,378 @@ class ShareAPIControllerTest extends TestCase {
 		$node->method('getStorage')->willReturn($storage);
 		$node->method('getId')->willReturn(42);
 		return [$userFolder, $node];
+	}
+
+	public function testPopulateTags(): void {
+		$tagger = $this->createMock(ITags::class);
+		$this->tagManager->method('load')
+			->with('files')
+			->willReturn($tagger);
+		$data = [
+			['file_source' => 10],
+			['file_source' => 22, 'foo' => 'bar'],
+			['file_source' => 42, 'x' => 'y'],
+		];
+		$tags = [
+			10 => ['tag3'],
+			42 => ['tag1', 'tag2'],
+		];
+		$tagger->method('getTagsForObjects')
+			->with([10, 22, 42])
+			->willReturn($tags);
+
+		$result = self::invokePrivate($this->ocs, 'populateTags', [$data]);
+		$this->assertSame([
+			['file_source' => 10, 'tags' => ['tag3']],
+			['file_source' => 22, 'foo' => 'bar', 'tags' => []],
+			['file_source' => 42, 'x' => 'y', 'tags' => ['tag1', 'tag2']],
+		], $result);
+	}
+
+	public static function trustedServerProvider(): array {
+		return [
+			'Trusted server' => [true, true],
+			'Untrusted server' => [false, false],
+		];
+	}
+
+	#[DataProvider(methodName: 'trustedServerProvider')]
+	public function testFormatShareWithFederatedShare(bool $isKnownServer, bool $isTrusted): void {
+		$nodeId = 12;
+		$nodePath = '/test.txt';
+
+		$node = $this->createMock(File::class);
+		$node->method('getId')->willReturn($nodeId);
+		$node->method('getPath')->willReturn($nodePath);
+		$node->method('getInternalPath')->willReturn(ltrim($nodePath, '/'));
+		$mountPoint = $this->createMock(IMountPoint::class);
+		$mountPoint->method('getMountType')->willReturn('local');
+		$node->method('getMountPoint')->willReturn($mountPoint);
+		$node->method('getMimetype')->willReturn('text/plain');
+		$storage = $this->createMock(IStorage::class);
+		$storageCache = $this->createMock(ICache::class);
+		$storageCache->method('getNumericStorageId')->willReturn(1);
+		$storage->method('getCache')->willReturn($storageCache);
+		$storage->method('getId')->willReturn('home::shareOwner');
+		$node->method('getStorage')->willReturn($storage);
+		$parent = $this->createMock(Folder::class);
+		$parent->method('getId')->willReturn(2);
+		$node->method('getParent')->willReturn($parent);
+		$node->method('getSize')->willReturn(1234);
+		$node->method('getMTime')->willReturn(1234567890);
+
+		$share = $this->createShare(
+			1,
+			IShare::TYPE_REMOTE,
+			'recipient@remoteserver.com', // shared with
+			'sender@testserver.com',      // shared by
+			'shareOwner',                 // share owner
+			$node,
+			Constants::PERMISSION_READ,
+			time(),
+			null,
+			2,
+			$nodePath,
+			$nodeId
+		);
+
+		$this->previewManager->method('isAvailable')->with($node)->willReturn(false);
+
+		$this->rootFolder->method('getUserFolder')
+			->with($this->currentUser)
+			->willReturnSelf();
+
+		$this->rootFolder->method('getFirstNodeById')
+			->with($share->getNodeId())
+			->willReturn($node);
+
+		$this->rootFolder->method('getRelativePath')
+			->with($node->getPath())
+			->willReturnArgument(0);
+
+		$serverName = 'remoteserver.com';
+		$this->trustedServers->method('isTrustedServer')
+			->with($serverName)
+			->willReturn($isKnownServer);
+
+		$result = $this->invokePrivate($this->ocs, 'formatShare', [$share]);
+
+		$this->assertSame($isTrusted, $result['is_trusted_server']);
+	}
+
+	public function testFormatShareWithFederatedShareWithAtInUsername(): void {
+		$nodeId = 12;
+		$nodePath = '/test.txt';
+
+		$node = $this->createMock(File::class);
+		$node->method('getId')->willReturn($nodeId);
+		$node->method('getPath')->willReturn($nodePath);
+		$node->method('getInternalPath')->willReturn(ltrim($nodePath, '/'));
+		$mountPoint = $this->createMock(IMountPoint::class);
+		$mountPoint->method('getMountType')->willReturn('local');
+		$node->method('getMountPoint')->willReturn($mountPoint);
+		$node->method('getMimetype')->willReturn('text/plain');
+		$storage = $this->createMock(IStorage::class);
+		$storageCache = $this->createMock(ICache::class);
+		$storageCache->method('getNumericStorageId')->willReturn(1);
+		$storage->method('getCache')->willReturn($storageCache);
+		$storage->method('getId')->willReturn('home::shareOwner');
+		$node->method('getStorage')->willReturn($storage);
+		$parent = $this->createMock(Folder::class);
+		$parent->method('getId')->willReturn(2);
+		$node->method('getParent')->willReturn($parent);
+		$node->method('getSize')->willReturn(1234);
+		$node->method('getMTime')->willReturn(1234567890);
+
+		$share = $this->createShare(
+			1,
+			IShare::TYPE_REMOTE,
+			'recipient@domain.com@remoteserver.com',
+			'sender@testserver.com',
+			'shareOwner',
+			$node,
+			Constants::PERMISSION_READ,
+			time(),
+			null,
+			2,
+			$nodePath,
+			$nodeId
+		);
+
+		$this->previewManager->method('isAvailable')->with($node)->willReturn(false);
+
+		$this->rootFolder->method('getUserFolder')
+			->with($this->currentUser)
+			->willReturnSelf();
+
+		$this->rootFolder->method('getFirstNodeById')
+			->with($share->getNodeId())
+			->willReturn($node);
+
+		$this->rootFolder->method('getRelativePath')
+			->with($node->getPath())
+			->willReturnArgument(0);
+
+		$serverName = 'remoteserver.com';
+		$this->trustedServers->method('isTrustedServer')
+			->with($serverName)
+			->willReturn(true);
+
+		$result = $this->invokePrivate($this->ocs, 'formatShare', [$share]);
+
+		$this->assertTrue($result['is_trusted_server']);
+	}
+
+	public function testOwnerCanAlwaysDownload(): void {
+		$ocs = $this->mockFormatShare();
+
+		$share = $this->createMock(IShare::class);
+		$node = $this->createMock(File::class);
+		$userFolder = $this->createMock(Folder::class);
+		$owner = $this->createMock(IUser::class);
+
+		$share->method('getSharedBy')->willReturn('sharedByUser');
+		$share->method('getNodeId')->willReturn(42);
+		$node->method('getOwner')->willReturn($owner);
+		$owner->method('getUID')->willReturn('sharedByUser');
+
+		$userFolder->method('getById')->with(42)->willReturn([$node]);
+		$this->rootFolder->method('getUserFolder')->with('sharedByUser')->willReturn($userFolder);
+
+		// Expect hideDownload to be set to false since owner can always download
+		$share->expects($this->once())->method('setHideDownload')->with(false);
+
+		$this->invokePrivate($ocs, 'checkInheritedAttributes', [$share]);
+	}
+
+	public function testParentHideDownloadEnforcedOnChild(): void {
+		$ocs = $this->mockFormatShare();
+
+		$share = $this->createMock(IShare::class);
+		$node = $this->createMock(File::class);
+		$userFolder = $this->createMock(Folder::class);
+		$owner = $this->createMock(IUser::class);
+		$storage = $this->createMock(SharedStorage::class);
+		$originalShare = $this->createMock(IShare::class);
+
+		$share->method('getSharedBy')->willReturn('sharedByUser');
+		$share->method('getNodeId')->willReturn(42);
+		$share->method('getHideDownload')->willReturn(false); // User wants to allow downloads
+		$node->method('getOwner')->willReturn($owner);
+		$owner->method('getUID')->willReturn('differentOwner');
+		$node->method('getStorage')->willReturn($storage);
+		$storage->method('instanceOfStorage')->with(SharedStorage::class)->willReturn(true);
+		$storage->method('getInstanceOfStorage')->with(SharedStorage::class)->willReturn($storage);
+		$storage->method('getShare')->willReturn($originalShare);
+		$originalShare->method('getHideDownload')->willReturn(true); // Parent hides download
+		$originalShare->method('getAttributes')->willReturn(null);
+
+		$userFolder->method('getById')->with(42)->willReturn([$node]);
+		$this->rootFolder->method('getUserFolder')->with('sharedByUser')->willReturn($userFolder);
+
+		// Should be forced to hide download due to parent restriction
+		$share->expects($this->once())->method('setHideDownload')->with(true);
+
+		$this->invokePrivate($ocs, 'checkInheritedAttributes', [$share]);
+	}
+
+	public function testUserCanHideWhenParentAllows(): void {
+		$ocs = $this->mockFormatShare();
+
+		$share = $this->createMock(IShare::class);
+		$node = $this->createMock(File::class);
+		$userFolder = $this->createMock(Folder::class);
+		$owner = $this->createMock(IUser::class);
+		$storage = $this->createMock(SharedStorage::class);
+		$originalShare = $this->createMock(IShare::class);
+
+		$share->method('getSharedBy')->willReturn('sharedByUser');
+		$share->method('getNodeId')->willReturn(42);
+		$share->method('getHideDownload')->willReturn(true); // User chooses to hide downloads
+		$node->method('getOwner')->willReturn($owner);
+		$owner->method('getUID')->willReturn('differentOwner');
+		$node->method('getStorage')->willReturn($storage);
+		$storage->method('instanceOfStorage')->with(SharedStorage::class)->willReturn(true);
+		$storage->method('getInstanceOfStorage')->with(SharedStorage::class)->willReturn($storage);
+		$storage->method('getShare')->willReturn($originalShare);
+		$originalShare->method('getHideDownload')->willReturn(false); // Parent allows download
+		$originalShare->method('getAttributes')->willReturn(null);
+
+		$userFolder->method('getById')->with(42)->willReturn([$node]);
+		$this->rootFolder->method('getUserFolder')->with('sharedByUser')->willReturn($userFolder);
+
+		// Should respect user's choice to hide downloads
+		$share->expects($this->once())->method('setHideDownload')->with(true);
+
+		$this->invokePrivate($ocs, 'checkInheritedAttributes', [$share]);
+	}
+
+	public function testParentDownloadAttributeInherited(): void {
+		$ocs = $this->mockFormatShare();
+
+		$share = $this->createMock(IShare::class);
+		$node = $this->createMock(File::class);
+		$userFolder = $this->createMock(Folder::class);
+		$owner = $this->createMock(IUser::class);
+		$storage = $this->createMock(SharedStorage::class);
+		$originalShare = $this->createMock(IShare::class);
+		$attributes = $this->createMock(IShareAttributes::class);
+		$shareAttributes = $this->createMock(IShareAttributes::class);
+
+		$share->method('getSharedBy')->willReturn('sharedByUser');
+		$share->method('getNodeId')->willReturn(42);
+		$share->method('getHideDownload')->willReturn(false); // User wants to allow downloads
+		$share->method('getAttributes')->willReturn($shareAttributes);
+		$share->method('newAttributes')->willReturn($shareAttributes);
+		$node->method('getOwner')->willReturn($owner);
+		$owner->method('getUID')->willReturn('differentOwner');
+		$node->method('getStorage')->willReturn($storage);
+		$storage->method('instanceOfStorage')->with(SharedStorage::class)->willReturn(true);
+		$storage->method('getInstanceOfStorage')->with(SharedStorage::class)->willReturn($storage);
+		$storage->method('getShare')->willReturn($originalShare);
+		$originalShare->method('getHideDownload')->willReturn(false);
+		$originalShare->method('getAttributes')->willReturn($attributes);
+		$attributes->method('getAttribute')->with('permissions', 'download')->willReturn(false); // Parent forbids download
+
+		$userFolder->method('getById')->with(42)->willReturn([$node]);
+		$this->rootFolder->method('getUserFolder')->with('sharedByUser')->willReturn($userFolder);
+
+		// Should be forced to hide download and set download attribute to false
+		$share->expects($this->once())->method('setHideDownload')->with(true);
+		$shareAttributes->expects($this->once())->method('setAttribute')->with('permissions', 'download', false);
+		$share->expects($this->once())->method('setAttributes')->with($shareAttributes);
+
+		$this->invokePrivate($ocs, 'checkInheritedAttributes', [$share]);
+	}
+
+	public function testFederatedStorageRespectsUserChoice(): void {
+		$ocs = $this->mockFormatShare();
+
+		$share = $this->createMock(IShare::class);
+		$node = $this->createMock(File::class);
+		$userFolder = $this->createMock(Folder::class);
+		$owner = $this->createMock(IUser::class);
+		$storage = $this->createMock(Storage::class);
+
+		$share->method('getSharedBy')->willReturn('sharedByUser');
+		$share->method('getNodeId')->willReturn(42);
+		$share->method('getHideDownload')->willReturn(true); // User chooses to hide downloads
+		$node->method('getOwner')->willReturn($owner);
+		$owner->method('getUID')->willReturn('differentOwner');
+		$node->method('getStorage')->willReturn($storage);
+		$storage->method('instanceOfStorage')->willReturnMap([
+			[SharedStorage::class, false],
+			[Storage::class, true]
+		]);
+
+		$userFolder->method('getById')->with(42)->willReturn([$node]);
+		$this->rootFolder->method('getUserFolder')->with('sharedByUser')->willReturn($userFolder);
+
+		// For federated storage, should respect user's choice
+		$share->expects($this->once())->method('setHideDownload')->with(true);
+
+		$this->invokePrivate($ocs, 'checkInheritedAttributes', [$share]);
+	}
+
+	public function testUserAllowsDownloadWhenParentPermits(): void {
+		$ocs = $this->mockFormatShare();
+
+		$share = $this->createMock(IShare::class);
+		$node = $this->createMock(File::class);
+		$userFolder = $this->createMock(Folder::class);
+		$owner = $this->createMock(IUser::class);
+		$storage = $this->createMock(SharedStorage::class);
+		$originalShare = $this->createMock(IShare::class);
+
+		$share->method('getSharedBy')->willReturn('sharedByUser');
+		$share->method('getNodeId')->willReturn(42);
+		$share->method('getHideDownload')->willReturn(false); // User wants to allow downloads
+		$node->method('getOwner')->willReturn($owner);
+		$owner->method('getUID')->willReturn('differentOwner');
+		$node->method('getStorage')->willReturn($storage);
+		$storage->method('instanceOfStorage')->with(SharedStorage::class)->willReturn(true);
+		$storage->method('getInstanceOfStorage')->with(SharedStorage::class)->willReturn($storage);
+		$storage->method('getShare')->willReturn($originalShare);
+		$originalShare->method('getHideDownload')->willReturn(false); // Parent allows download
+		$originalShare->method('getAttributes')->willReturn(null);
+
+		$userFolder->method('getById')->with(42)->willReturn([$node]);
+		$this->rootFolder->method('getUserFolder')->with('sharedByUser')->willReturn($userFolder);
+
+		// Should allow downloads as both user and parent permit it
+		$share->expects($this->once())->method('setHideDownload')->with(false);
+
+		$this->invokePrivate($ocs, 'checkInheritedAttributes', [$share]);
+	}
+
+	public function testWrapperStorageUnwrapped(): void {
+		$ocs = $this->mockFormatShare();
+
+		$share = $this->createMock(IShare::class);
+		$node = $this->createMock(File::class);
+		$userFolder = $this->createMock(Folder::class);
+		$owner = $this->createMock(IUser::class);
+		$wrapperStorage = $this->createMock(Wrapper::class);
+		$innerStorage = $this->createMock(SharedStorage::class);
+		$originalShare = $this->createMock(IShare::class);
+
+		$share->method('getSharedBy')->willReturn('sharedByUser');
+		$share->method('getNodeId')->willReturn(42);
+		$share->method('getHideDownload')->willReturn(false);
+		$node->method('getOwner')->willReturn($owner);
+		$owner->method('getUID')->willReturn('differentOwner');
+		$node->method('getStorage')->willReturn($wrapperStorage);
+		$wrapperStorage->method('instanceOfStorage')->with(SharedStorage::class)->willReturn(true);
+		$wrapperStorage->method('getInstanceOfStorage')->with(SharedStorage::class)->willReturn($innerStorage);
+		$innerStorage->method('getShare')->willReturn($originalShare);
+		$originalShare->method('getHideDownload')->willReturn(false);
+		$originalShare->method('getAttributes')->willReturn(null);
+
+		$userFolder->method('getById')->with(42)->willReturn([$node]);
+		$this->rootFolder->method('getUserFolder')->with('sharedByUser')->willReturn($userFolder);
+
+		$share->expects($this->once())->method('setHideDownload')->with(false);
+
+		$this->invokePrivate($ocs, 'checkInheritedAttributes', [$share]);
 	}
 }

@@ -1,4 +1,7 @@
 <?php
+
+declare(strict_types=1);
+
 /**
  * SPDX-FileCopyrightText: 2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -61,6 +64,6 @@ class PublicLinksUpload extends ShareActivitySettings {
 	 * @since 11.0.0
 	 */
 	public function isDefaultEnabledMail() {
-		return true;
+		return false;
 	}
 }

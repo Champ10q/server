@@ -1,4 +1,6 @@
 <?php
+
+declare(strict_types=1);
 /**
  * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -12,10 +14,10 @@ use Test\TestCase;
 /**
  * Class ExpireTest
  *
- * @group DB
  *
  * @package OCA\Files_Versions\Tests\Command
  */
+#[\PHPUnit\Framework\Attributes\Group(name: 'DB')]
 class ExpireTest extends TestCase {
 	public function testExpireNonExistingUser(): void {
 		$command = new Expire($this->getUniqueID('test'), '');

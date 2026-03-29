@@ -1,5 +1,6 @@
 <?php
 
+declare(strict_types=1);
 /**
  * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -15,10 +16,10 @@ use Test\TestCase;
 /**
  * Class ApplicationTest
  *
- * @group DB
  *
  * @package OCA\DAV\Tests\Unit\AppInfo
  */
+#[\PHPUnit\Framework\Attributes\Group(name: 'DB')]
 class ApplicationTest extends TestCase {
 	public function test(): void {
 		$app = new Application();

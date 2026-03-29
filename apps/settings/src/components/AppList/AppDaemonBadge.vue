@@ -3,7 +3,8 @@
   - SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 <template>
-	<span v-if="daemon"
+	<span
+		v-if="daemon"
 		class="app-daemon-badge"
 		:title="daemon.name">
 		<NcIconSvgWrapper :path="mdiFileChart" :size="20" inline />
@@ -13,8 +14,9 @@
 
 <script setup lang="ts">
 import type { IDeployDaemon } from '../../app-types.ts'
+
 import { mdiFileChart } from '@mdi/js'
-import NcIconSvgWrapper from '@nextcloud/vue/dist/Components/NcIconSvgWrapper.js'
+import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
 
 defineProps<{
 	daemon?: IDeployDaemon

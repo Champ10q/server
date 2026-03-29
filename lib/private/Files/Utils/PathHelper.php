@@ -16,7 +16,7 @@ class PathHelper {
 	 * @return ?string
 	 */
 	public static function getRelativePath(string $root, string $path) {
-		if ($root === '' or $root === '/') {
+		if ($root === '' || $root === '/') {
 			return self::normalizePath($path);
 		}
 		if ($path === $root) {
@@ -34,9 +34,11 @@ class PathHelper {
 	 * @return string
 	 */
 	public static function normalizePath(string $path): string {
-		if ($path === '' or $path === '/') {
+		if ($path === '' || $path === '/') {
 			return '/';
 		}
+		// No null bytes
+		$path = str_replace(chr(0), '', $path);
 		//no windows style slashes
 		$path = str_replace('\\', '/', $path);
 		//add leading slash

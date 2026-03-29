@@ -13,11 +13,11 @@ use OCP\Files\FileInfo;
 
 class ObjectStoreScanner extends Scanner {
 	public function scanFile($file, $reuseExisting = 0, $parentId = -1, $cacheData = null, $lock = true, $data = null) {
-		return [];
+		return null;
 	}
 
 	public function scan($path, $recursive = self::SCAN_RECURSIVE, $reuse = -1, $lock = true) {
-		return [];
+		return null;
 	}
 
 	protected function scanChildren(string $path, $recursive, int $reuse, int $folderId, bool $lock, int|float $oldSize, &$etagChanged = false) {
@@ -29,7 +29,7 @@ class ObjectStoreScanner extends Scanner {
 		// find any path marked as unscanned and run the scanner until no more paths are unscanned (or we get stuck)
 		// we sort by path DESC to ensure that contents of a folder are handled before the parent folder
 		while (($path = $this->getIncomplete()) !== false && $path !== $lastPath) {
-			$this->runBackgroundScanJob(function () use ($path) {
+			$this->runBackgroundScanJob(function () use ($path): void {
 				$item = $this->cache->get($path);
 				if ($item && $item->getMimeType() !== FileInfo::MIMETYPE_FOLDER) {
 					$fh = $this->storage->fopen($path, 'r');
@@ -61,7 +61,7 @@ class ObjectStoreScanner extends Scanner {
 		$query->select('path')
 			->from('filecache')
 			->where($query->expr()->eq('storage', $query->createNamedParameter($this->cache->getNumericStorageId(), IQueryBuilder::PARAM_INT)))
-			->andWhere($query->expr()->lt('size', $query->createNamedParameter(0, IQueryBuilder::PARAM_INT)))
+			->andWhere($query->expr()->eq('size', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
 			->orderBy('path', 'DESC')
 			->setMaxResults(1);
 

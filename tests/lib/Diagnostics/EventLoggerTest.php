@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2019-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2017 ownCloud, Inc.
@@ -14,8 +15,7 @@ use Psr\Log\LoggerInterface;
 use Test\TestCase;
 
 class EventLoggerTest extends TestCase {
-	/** @var \OC\Diagnostics\EventLogger */
-	private $logger;
+	private EventLogger $logger;
 
 	protected function setUp(): void {
 		parent::setUp();

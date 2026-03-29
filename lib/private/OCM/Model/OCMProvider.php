@@ -9,13 +9,11 @@ declare(strict_types=1);
 
 namespace OC\OCM\Model;
 
-use NCU\Security\Signature\Model\Signatory;
-use OCP\EventDispatcher\IEventDispatcher;
-use OCP\OCM\Events\ResourceTypeRegisterEvent;
 use OCP\OCM\Exceptions\OCMArgumentException;
 use OCP\OCM\Exceptions\OCMProviderException;
 use OCP\OCM\IOCMProvider;
 use OCP\OCM\IOCMResource;
+use OCP\Security\Signature\Model\Signatory;
 
 /**
  * @since 28.0.0
@@ -23,14 +21,15 @@ use OCP\OCM\IOCMResource;
 class OCMProvider implements IOCMProvider {
 	private bool $enabled = false;
 	private string $apiVersion = '';
+	private string $inviteAcceptDialog = '';
+	private array $capabilities = [];
 	private string $endPoint = '';
 	/** @var IOCMResource[] */
 	private array $resourceTypes = [];
 	private ?Signatory $signatory = null;
-	private bool $emittedEvent = false;
 
 	public function __construct(
-		protected IEventDispatcher $dispatcher,
+		private readonly string $provider = '',
 	) {
 	}
 
@@ -71,6 +70,30 @@ class OCMProvider implements IOCMProvider {
 	}
 
 	/**
+	 * returns the invite accept dialog
+	 *
+	 * @return string
+	 * @since 32.0.0
+	 */
+	public function getInviteAcceptDialog(): string {
+		return $this->inviteAcceptDialog;
+	}
+
+	/**
+	 * set the invite accept dialog
+	 *
+	 * @param string $inviteAcceptDialog
+	 *
+	 * @return $this
+	 * @since 32.0.0
+	 */
+	public function setInviteAcceptDialog(string $inviteAcceptDialog): static {
+		$this->inviteAcceptDialog = $inviteAcceptDialog;
+
+		return $this;
+	}
+
+	/**
 	 * @param string $endPoint
 	 *
 	 * @return $this
@@ -86,6 +109,46 @@ class OCMProvider implements IOCMProvider {
 	 */
 	public function getEndPoint(): string {
 		return $this->endPoint;
+	}
+
+	/**
+	 * @return string
+	 */
+	public function getProvider(): string {
+		return $this->provider;
+	}
+
+	/**
+	 * @param array $capabilities
+	 *
+	 * @return $this
+	 */
+	public function setCapabilities(array $capabilities): static {
+		$this->capabilities = array_unique(array_merge(
+			$this->capabilities,
+			array_map([$this, 'normalizeCapability'], $capabilities)
+		));
+		return $this;
+	}
+
+	/**
+	 * @return array
+	 */
+	public function getCapabilities(): array {
+		return $this->capabilities;
+	}
+
+	/**
+	 * @param string $capability
+	 * @return bool
+	 */
+	public function hasCapability(string $capability): bool {
+		return (in_array($this->normalizeCapability($capability), $this->capabilities, true));
+	}
+
+	private function normalizeCapability(string $capability): string {
+		// since ocm 1.2, removing leading slashes from capabilities
+		return strtolower(ltrim($capability, '/'));
 	}
 
 	/**
@@ -122,12 +185,6 @@ class OCMProvider implements IOCMProvider {
 	 * @return IOCMResource[]
 	 */
 	public function getResourceTypes(): array {
-		if (!$this->emittedEvent) {
-			$this->emittedEvent = true;
-			$event = new ResourceTypeRegisterEvent($this);
-			$this->dispatcher->dispatchTyped($event);
-		}
-
 		return $this->resourceTypes;
 	}
 
@@ -166,9 +223,8 @@ class OCMProvider implements IOCMProvider {
 	 *
 	 * @param array $data
 	 *
-	 * @return $this
+	 * @return OCMProvider&static
 	 * @throws OCMProviderException in case a descent provider cannot be generated from data
-	 * @see self::jsonSerialize()
 	 */
 	public function import(array $data): static {
 		$this->setEnabled(is_bool($data['enabled'] ?? '') ? $data['enabled'] : false)
@@ -182,6 +238,8 @@ class OCMProvider implements IOCMProvider {
 			$resources[] = $resource->import($resourceData);
 		}
 		$this->setResourceTypes($resources);
+		$this->setInviteAcceptDialog($data['inviteAcceptDialog'] ?? '');
+		$this->setCapabilities($data['capabilities'] ?? []);
 
 		if (isset($data['publicKey'])) {
 			// import details about the remote request signing public key, if available
@@ -209,21 +267,7 @@ class OCMProvider implements IOCMProvider {
 	}
 
 	/**
-	 * @return array{
-	 *      enabled: bool,
-	 *      apiVersion: '1.0-proposal1',
-	 *      endPoint: string,
-	 *      publicKey: array{
-	 *          keyId: string,
-	 *          publicKeyPem: string
-	 *      },
-	 *      resourceTypes: list<array{
-	 *          name: string,
-	 *          shareTypes: list<string>,
-	 *          protocols: array<string, string>
-	 *      }>,
-	 *      version: string
-	 *  }
+	 * @since 28.0.0
 	 */
 	public function jsonSerialize(): array {
 		$resourceTypes = [];
@@ -231,13 +275,25 @@ class OCMProvider implements IOCMProvider {
 			$resourceTypes[] = $res->jsonSerialize();
 		}
 
-		return [
+		$response = [
 			'enabled' => $this->isEnabled(),
 			'apiVersion' => '1.0-proposal1', // deprecated, but keep it to stay compatible with old version
 			'version' => $this->getApiVersion(), // informative but real version
 			'endPoint' => $this->getEndPoint(),
-			'publicKey' => $this->getSignatory()->jsonSerialize(),
+			'publicKey' => $this->getSignatory()?->jsonSerialize(),
+			'provider' => $this->getProvider(),
 			'resourceTypes' => $resourceTypes
 		];
+
+		$capabilities = $this->getCapabilities();
+		if ($capabilities) {
+			$response['capabilities'] = $capabilities;
+		}
+		$inviteAcceptDialog = $this->getInviteAcceptDialog();
+		if ($inviteAcceptDialog !== '') {
+			$response['inviteAcceptDialog'] = $inviteAcceptDialog;
+		}
+		return $response;
+
 	}
 }

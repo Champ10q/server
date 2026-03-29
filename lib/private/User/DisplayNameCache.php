@@ -11,6 +11,7 @@ use OCP\EventDispatcher\Event;
 use OCP\EventDispatcher\IEventListener;
 use OCP\ICache;
 use OCP\ICacheFactory;
+use OCP\IUser;
 use OCP\IUserManager;
 use OCP\User\Events\UserChangedEvent;
 use OCP\User\Events\UserDeletedEvent;
@@ -24,19 +25,27 @@ use OCP\User\Events\UserDeletedEvent;
  * @template-implements IEventListener<UserChangedEvent|UserDeletedEvent>
  */
 class DisplayNameCache implements IEventListener {
+	private const CACHE_TTL = 24 * 60 * 60; // 1 day
+
 	private array $cache = [];
 	private ICache $memCache;
-	private IUserManager $userManager;
 
-	public function __construct(ICacheFactory $cacheFactory, IUserManager $userManager) {
+	public function __construct(
+		ICacheFactory $cacheFactory,
+		private IUserManager $userManager,
+	) {
 		$this->memCache = $cacheFactory->createDistributed('displayNameMappingCache');
-		$this->userManager = $userManager;
 	}
 
 	public function getDisplayName(string $userId): ?string {
 		if (isset($this->cache[$userId])) {
 			return $this->cache[$userId];
 		}
+
+		if (strlen($userId) > IUser::MAX_USERID_LENGTH) {
+			return null;
+		}
+
 		$displayName = $this->memCache->get($userId);
 		if ($displayName) {
 			$this->cache[$userId] = $displayName;
@@ -50,7 +59,7 @@ class DisplayNameCache implements IEventListener {
 			$displayName = null;
 		}
 		$this->cache[$userId] = $displayName;
-		$this->memCache->set($userId, $displayName, 60 * 10); // 10 minutes
+		$this->memCache->set($userId, $displayName, self::CACHE_TTL);
 
 		return $displayName;
 	}
@@ -65,7 +74,7 @@ class DisplayNameCache implements IEventListener {
 			$userId = $event->getUser()->getUID();
 			$newDisplayName = $event->getValue();
 			$this->cache[$userId] = $newDisplayName;
-			$this->memCache->set($userId, $newDisplayName, 60 * 10); // 10 minutes
+			$this->memCache->set($userId, $newDisplayName, self::CACHE_TTL);
 		}
 		if ($event instanceof UserDeletedEvent) {
 			$userId = $event->getUser()->getUID();

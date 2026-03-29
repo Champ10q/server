@@ -1,4 +1,6 @@
 <?php
+
+declare(strict_types=1);
 /**
  * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -9,8 +11,7 @@ $expectedFiles = [
 	'..',
 	'.devcontainer',
 	'.editorconfig',
-	'.eslintignore',
-	'.eslintrc.js',
+	'.envrc',
 	'.git',
 	'.git-blame-ignore-revs',
 	'.gitattributes',
@@ -21,11 +22,10 @@ $expectedFiles = [
 	'.idea',
 	'.jshintrc',
 	'.mailmap',
+	'.nextcloudignore',
 	'.npmignore',
 	'.php-cs-fixer.dist.php',
 	'.pre-commit-config.yaml',
-	'.reuse',
-	'.scrutinizer.yml',
 	'.tag',
 	'.tx',
 	'.user.ini',
@@ -40,12 +40,12 @@ $expectedFiles = [
 	'DESIGN.md',
 	'Makefile',
 	'README.md',
+	'REUSE.toml',
 	'SECURITY.md',
 	'apps',
 	'autotest-checkers.sh',
 	'autotest-external.sh',
 	'autotest.sh',
-	'babel.config.js',
 	'build',
 	'codecov.yml',
 	'composer.json',
@@ -57,9 +57,11 @@ $expectedFiles = [
 	'cron.php',
 	'custom.d.ts',
 	'cypress.config.ts',
-	'cypress.d.ts',
 	'cypress',
 	'dist',
+	'eslint.config.js',
+	'flake.lock',
+	'flake.nix',
 	'index.html',
 	'index.php',
 	'lib',
@@ -67,10 +69,12 @@ $expectedFiles = [
 	'occ',
 	'ocs',
 	'ocs-provider',
+	'openapi.json',
 	'package-lock.json',
 	'package.json',
 	'psalm-ncu.xml',
 	'psalm-ocp.xml',
+	'psalm-strict.xml',
 	'psalm.xml',
 	'public.php',
 	'remote.php',
@@ -83,10 +87,9 @@ $expectedFiles = [
 	'tsconfig.json',
 	'vendor-bin',
 	'version.php',
+	'vite.config.ts',
 	'vitest.config.ts',
-	'webpack.common.js',
-	'webpack.config.js',
-	'webpack.modules.js',
+	'window.d.ts',
 ];
 $actualFiles = [];
 

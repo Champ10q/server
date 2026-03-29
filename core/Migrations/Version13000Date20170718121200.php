@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -30,7 +31,7 @@ class Version13000Date20170718121200 extends SimpleMigrationStep {
 		if ($table->hasColumn('fileid')) {
 			$qb = $this->connection->getQueryBuilder();
 			$qb->delete('properties');
-			$qb->execute();
+			$qb->executeStatement();
 		}
 	}
 
@@ -340,6 +341,7 @@ class Version13000Date20170718121200 extends SimpleMigrationStep {
 			// $table->addIndex(['userid'], 'property_index');
 			$table->addIndex(['userid', 'propertypath'], 'properties_path_index');
 			$table->addIndex(['propertypath'], 'properties_pathonly_index');
+			$table->addIndex(['propertyname', 'propertypath', 'userid'], 'properties_name_path_user');
 		} else {
 			$table = $schema->getTable('properties');
 			if ($table->hasColumn('propertytype')) {
@@ -453,6 +455,7 @@ class Version13000Date20170718121200 extends SimpleMigrationStep {
 			$table->addIndex(['file_source'], 'file_source_index');
 			$table->addIndex(['token'], 'token_index');
 			$table->addIndex(['share_with'], 'share_with_index');
+			$table->addIndex(['share_with', 'file_target'], 'share_with_file_target_index', [], ['lengths' => [null, 128]]);
 			$table->addIndex(['parent'], 'parent_index');
 			$table->addIndex(['uid_owner'], 'owner_index');
 			$table->addIndex(['uid_initiator'], 'initiator_index');
@@ -657,6 +660,7 @@ class Version13000Date20170718121200 extends SimpleMigrationStep {
 			$table->addIndex(['uid'], 'uid_index');
 			$table->addIndex(['type'], 'type_index');
 			$table->addIndex(['category'], 'category_index');
+			$table->addUniqueIndex(['uid', 'type', 'category'], 'unique_category_per_user');
 		}
 
 		if (!$schema->hasTable('vcategory_to_object')) {
@@ -732,6 +736,8 @@ class Version13000Date20170718121200 extends SimpleMigrationStep {
 			$table->addIndex(['systemtagid', 'objecttype'], 'systag_by_tagid');
 			// systag_by_objectid was added later and might be missing in older deployments
 			$table->addIndex(['objectid'], 'systag_by_objectid');
+			// systag_objecttype was added later and might be missing in older deployments
+			$table->addIndex(['objecttype'], 'systag_objecttype');
 		}
 
 		if (!$schema->hasTable('systemtag_group')) {
@@ -1004,6 +1010,7 @@ class Version13000Date20170718121200 extends SimpleMigrationStep {
 		$query = $this->connection->getQueryBuilder();
 		$query->select('*')
 			->from('dav_properties');
+		$result = $query->executeQuery();
 
 		$insert = $this->connection->getQueryBuilder();
 		$insert->insert('properties')
@@ -1012,14 +1019,13 @@ class Version13000Date20170718121200 extends SimpleMigrationStep {
 			->setValue('propertyvalue', $insert->createParameter('propertyvalue'))
 			->setValue('userid', $insert->createParameter('userid'));
 
-		$result = $query->execute();
-		while ($row = $result->fetch()) {
+		while ($row = $result->fetchAssociative()) {
 			preg_match('/(calendar)\/([A-z0-9-@_]+)\//', $row['propertypath'], $match);
 			$insert->setParameter('propertypath', (string)$row['propertypath'])
 				->setParameter('propertyname', (string)$row['propertyname'])
 				->setParameter('propertyvalue', (string)$row['propertyvalue'])
 				->setParameter('userid', ($match[2] ?? ''));
-			$insert->execute();
+			$insert->executeStatement();
 		}
 	}
 }

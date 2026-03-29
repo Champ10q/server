@@ -17,6 +17,7 @@ use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\BruteForceProtection;
 use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
+use OCP\AppFramework\Http\Attribute\OpenAPI;
 use OCP\AppFramework\Http\Attribute\PublicPage;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\Utility\ITimeFactory;
@@ -29,6 +30,7 @@ use OCP\Security\ICrypto;
 use OCP\Security\ISecureRandom;
 use Psr\Log\LoggerInterface;
 
+#[OpenAPI(scope: OpenAPI::SCOPE_DEFAULT)]
 class OauthApiController extends Controller {
 	// the authorization code expires after 10 minutes
 	public const AUTHORIZATION_CODE_EXPIRES_AFTER = 10 * 60;
@@ -52,7 +54,7 @@ class OauthApiController extends Controller {
 	/**
 	 * Get a token
 	 *
-	 * @param string $grant_type Token type that should be granted
+	 * @param 'authorization_code'|'refresh_token' $grant_type Token type that should be granted
 	 * @param ?string $code Code of the flow
 	 * @param ?string $refresh_token Refresh token
 	 * @param ?string $client_id Client ID
@@ -91,7 +93,7 @@ class OauthApiController extends Controller {
 			$response = new JSONResponse([
 				'error' => 'invalid_request',
 			], Http::STATUS_BAD_REQUEST);
-			$response->throttle(['invalid_request' => 'token not found', 'code' => $code]);
+			$response->throttle(['invalid_request' => 'token not found']);
 			return $response;
 		}
 

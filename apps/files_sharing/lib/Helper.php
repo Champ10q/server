@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -9,6 +10,8 @@ namespace OCA\Files_Sharing;
 use OC\Files\Filesystem;
 use OC\Files\View;
 use OCA\Files_Sharing\AppInfo\Application;
+use OCP\IConfig;
+use OCP\Server;
 use OCP\Util;
 
 class Helper {
@@ -26,7 +29,7 @@ class Helper {
 	 * @param View $view
 	 * @return string $path
 	 */
-	public static function generateUniqueTarget($path, $view) {
+	public static function generateUniqueTarget(string $path, View $view): string {
 		$pathinfo = pathinfo($path);
 		$ext = isset($pathinfo['extension']) ? '.' . $pathinfo['extension'] : '';
 		$name = $pathinfo['filename'];
@@ -52,7 +55,7 @@ class Helper {
 			$view = Filesystem::getView();
 		}
 
-		$config = \OC::$server->getConfig();
+		$config = Server::get(IConfig::class);
 		$systemDefault = $config->getSystemValue('share_folder', '/');
 		$allowCustomShareFolder = $config->getSystemValueBool('sharing.allow_custom_share_folder', true);
 
@@ -78,14 +81,5 @@ class Helper {
 		}
 
 		return $shareFolder;
-	}
-
-	/**
-	 * set default share folder
-	 *
-	 * @param string $shareFolder
-	 */
-	public static function setShareFolder($shareFolder) {
-		\OC::$server->getConfig()->setSystemValue('share_folder', $shareFolder);
 	}
 }

@@ -39,7 +39,7 @@ class Repair extends Command {
 		parent::__construct();
 	}
 
-	protected function configure() {
+	protected function configure(): void {
 		$this
 			->setName('maintenance:repair')
 			->setDescription('repair this installation')
@@ -61,7 +61,7 @@ class Repair extends Command {
 			$this->repair->addStep($step);
 		}
 
-		$apps = $this->appManager->getInstalledApps();
+		$apps = $this->appManager->getEnabledApps();
 		foreach ($apps as $app) {
 			if (!$this->appManager->isEnabledForUser($app)) {
 				continue;
@@ -70,7 +70,7 @@ class Repair extends Command {
 			if (!is_array($info)) {
 				continue;
 			}
-			\OC_App::loadApp($app);
+			$this->appManager->loadApp($app);
 			$steps = $info['repair-steps']['post-migration'];
 			foreach ($steps as $step) {
 				try {
@@ -81,20 +81,18 @@ class Repair extends Command {
 			}
 		}
 
-
-
 		$maintenanceMode = $this->config->getSystemValueBool('maintenance');
 		$this->config->setSystemValue('maintenance', true);
 
 		$this->progress = new ProgressBar($output);
 		$this->output = $output;
-		$this->dispatcher->addListener(RepairStartEvent::class, [$this, 'handleRepairFeedBack']);
-		$this->dispatcher->addListener(RepairAdvanceEvent::class, [$this, 'handleRepairFeedBack']);
-		$this->dispatcher->addListener(RepairFinishEvent::class, [$this, 'handleRepairFeedBack']);
-		$this->dispatcher->addListener(RepairStepEvent::class, [$this, 'handleRepairFeedBack']);
-		$this->dispatcher->addListener(RepairInfoEvent::class, [$this, 'handleRepairFeedBack']);
-		$this->dispatcher->addListener(RepairWarningEvent::class, [$this, 'handleRepairFeedBack']);
-		$this->dispatcher->addListener(RepairErrorEvent::class, [$this, 'handleRepairFeedBack']);
+		$this->dispatcher->addListener(RepairStartEvent::class, $this->handleRepairFeedBack(...));
+		$this->dispatcher->addListener(RepairAdvanceEvent::class, $this->handleRepairFeedBack(...));
+		$this->dispatcher->addListener(RepairFinishEvent::class, $this->handleRepairFeedBack(...));
+		$this->dispatcher->addListener(RepairStepEvent::class, $this->handleRepairFeedBack(...));
+		$this->dispatcher->addListener(RepairInfoEvent::class, $this->handleRepairFeedBack(...));
+		$this->dispatcher->addListener(RepairWarningEvent::class, $this->handleRepairFeedBack(...));
+		$this->dispatcher->addListener(RepairErrorEvent::class, $this->handleRepairFeedBack(...));
 
 		$this->repair->run();
 

@@ -8,9 +8,6 @@ declare(strict_types=1);
  */
 namespace OC\Mail;
 
-use Egulias\EmailValidator\EmailValidator;
-use Egulias\EmailValidator\Validation\NoRFCWarningsValidation;
-use Egulias\EmailValidator\Validation\RFCValidation;
 use OCP\Defaults;
 use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IBinaryFinder;
@@ -21,8 +18,11 @@ use OCP\L10N\IFactory;
 use OCP\Mail\Events\BeforeMessageSent;
 use OCP\Mail\IAttachment;
 use OCP\Mail\IEMailTemplate;
+use OCP\Mail\IEmailValidator;
 use OCP\Mail\IMailer;
 use OCP\Mail\IMessage;
+use OCP\Server;
+use OCP\Util;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Mailer\Exception\TransportExceptionInterface;
 use Symfony\Component\Mailer\Mailer as SymfonyMailer;
@@ -69,6 +69,7 @@ class Mailer implements IMailer {
 		private IL10N $l10n,
 		private IEventDispatcher $dispatcher,
 		private IFactory $l10nFactory,
+		private IEmailValidator $emailValidator,
 	) {
 	}
 
@@ -172,7 +173,7 @@ class Mailer implements IMailer {
 		}
 
 		if (empty($message->getFrom())) {
-			$message->setFrom([\OCP\Util::getDefaultEmailAddress('no-reply') => $this->defaults->getName()]);
+			$message->setFrom([Util::getDefaultEmailAddress('no-reply') => $this->defaults->getName()]);
 		}
 
 		$mailer = $this->getInstance();
@@ -191,7 +192,7 @@ class Mailer implements IMailer {
 			$recipients = array_merge($message->getTo(), $message->getCc(), $message->getBcc());
 			$failedRecipients = [];
 
-			array_walk($recipients, function ($value, $key) use (&$failedRecipients) {
+			array_walk($recipients, function ($value, $key) use (&$failedRecipients): void {
 				if (is_numeric($key)) {
 					$failedRecipients[] = $value;
 				} else {
@@ -206,14 +207,14 @@ class Mailer implements IMailer {
 			$mailer->send($message->getSymfonyEmail());
 		} catch (TransportExceptionInterface $e) {
 			$logMessage = sprintf('Sending mail to "%s" with subject "%s" failed', print_r($message->getTo(), true), $message->getSubject());
-			$this->logger->debug($logMessage, ['app' => 'core', 'exception' => $e]);
+			$this->logger->error($logMessage, ['app' => 'core', 'exception' => $e]);
 			if ($debugMode) {
 				$this->logger->debug($e->getDebug(), ['app' => 'core']);
 			}
 			$recipients = array_merge($message->getTo(), $message->getCc(), $message->getBcc());
 			$failedRecipients = [];
 
-			array_walk($recipients, function ($value, $key) use (&$failedRecipients) {
+			array_walk($recipients, function ($value, $key) use (&$failedRecipients): void {
 				if (is_numeric($key)) {
 					$failedRecipients[] = $value;
 				} else {
@@ -232,23 +233,12 @@ class Mailer implements IMailer {
 	}
 
 	/**
-	 * @deprecated 26.0.0 Implicit validation is done in \OC\Mail\Message::setRecipients
-	 *                    via \Symfony\Component\Mime\Address::__construct
-	 *
 	 * @param string $email Email address to be validated
 	 * @return bool True if the mail address is valid, false otherwise
+	 * @deprecated 26.0.0 use IEmailValidator.isValid instead
 	 */
 	public function validateMailAddress(string $email): bool {
-		if ($email === '') {
-			// Shortcut: empty addresses are never valid
-			return false;
-		}
-
-		$strictMailCheck = $this->config->getAppValue('core', 'enforce_strict_email_check', 'yes') === 'yes';
-		$validator = new EmailValidator();
-		$validation = $strictMailCheck ? new NoRFCWarningsValidation() : new RFCValidation();
-
-		return $validator->isValid($email, $validation);
+		return $this->emailValidator->isValid($email);
 	}
 
 	protected function getInstance(): MailerInterface {
@@ -337,7 +327,7 @@ class Mailer implements IMailer {
 				$binaryPath = '/var/qmail/bin/sendmail';
 				break;
 			default:
-				$sendmail = \OCP\Server::get(IBinaryFinder::class)->findBinaryPath('sendmail');
+				$sendmail = Server::get(IBinaryFinder::class)->findBinaryPath('sendmail');
 				if ($sendmail === false) {
 					// fallback (though not sure what good it'll do)
 					$sendmail = '/usr/sbin/sendmail';

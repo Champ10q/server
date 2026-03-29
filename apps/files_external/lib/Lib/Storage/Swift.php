@@ -21,6 +21,9 @@ use OCP\Files\StorageAuthException;
 use OCP\Files\StorageBadConfigException;
 use OCP\Files\StorageNotAvailableException;
 use OCP\ICache;
+use OCP\ICacheFactory;
+use OCP\ITempManager;
+use OCP\Server;
 use OpenStack\Common\Error\BadResponseError;
 use OpenStack\ObjectStore\v1\Models\Container;
 use OpenStack\ObjectStore\v1\Models\StorageObject;
@@ -101,7 +104,7 @@ class Swift extends Common {
 		} catch (BadResponseError $e) {
 			// Expected response is "404 Not Found", so only log if it isn't
 			if ($e->getResponse()->getStatusCode() !== 404) {
-				\OC::$server->get(LoggerInterface::class)->error($e->getMessage(), [
+				Server::get(LoggerInterface::class)->error($e->getMessage(), [
 					'exception' => $e,
 					'app' => 'files_external',
 				]);
@@ -123,9 +126,9 @@ class Swift extends Common {
 	}
 
 	public function __construct(array $parameters) {
-		if ((empty($parameters['key']) and empty($parameters['password']))
-			or (empty($parameters['user']) && empty($parameters['userid'])) or empty($parameters['bucket'])
-			or empty($parameters['region'])
+		if ((empty($parameters['key']) && empty($parameters['password']))
+			|| (empty($parameters['user']) && empty($parameters['userid'])) || empty($parameters['bucket'])
+			|| empty($parameters['region'])
 		) {
 			throw new StorageBadConfigException('API Key or password, Login, Bucket and Region have to be configured.');
 		}
@@ -163,13 +166,13 @@ class Swift extends Common {
 		// FIXME: private class...
 		$this->objectCache = new CappedMemoryCache();
 		$this->connectionFactory = new SwiftFactory(
-			\OC::$server->getMemCacheFactory()->createDistributed('swift/'),
+			Server::get(ICacheFactory::class)->createDistributed('swift/'),
 			$this->params,
-			\OC::$server->get(LoggerInterface::class)
+			Server::get(LoggerInterface::class)
 		);
 		$this->objectStore = new \OC\Files\ObjectStore\Swift($this->params, $this->connectionFactory);
 		$this->bucket = $parameters['bucket'];
-		$this->mimeDetector = \OC::$server->get(IMimeTypeDetector::class);
+		$this->mimeDetector = Server::get(IMimeTypeDetector::class);
 	}
 
 	public function mkdir(string $path): bool {
@@ -193,7 +196,7 @@ class Swift extends Common {
 			// with all properties
 			$this->objectCache->remove($path);
 		} catch (BadResponseError $e) {
-			\OC::$server->get(LoggerInterface::class)->error($e->getMessage(), [
+			Server::get(LoggerInterface::class)->error($e->getMessage(), [
 				'exception' => $e,
 				'app' => 'files_external',
 			]);
@@ -237,7 +240,7 @@ class Swift extends Common {
 			$this->objectStore->deleteObject($path . '/');
 			$this->objectCache->remove($path . '/');
 		} catch (BadResponseError $e) {
-			\OC::$server->get(LoggerInterface::class)->error($e->getMessage(), [
+			Server::get(LoggerInterface::class)->error($e->getMessage(), [
 				'exception' => $e,
 				'app' => 'files_external',
 			]);
@@ -275,7 +278,7 @@ class Swift extends Common {
 
 			return IteratorDirectory::wrap($files);
 		} catch (\Exception $e) {
-			\OC::$server->get(LoggerInterface::class)->error($e->getMessage(), [
+			Server::get(LoggerInterface::class)->error($e->getMessage(), [
 				'exception' => $e,
 				'app' => 'files_external',
 			]);
@@ -285,7 +288,6 @@ class Swift extends Common {
 
 	public function stat(string $path): array|false {
 		$path = $this->normalizePath($path);
-
 		if ($path === '.') {
 			$path = '';
 		} elseif ($this->is_dir($path)) {
@@ -298,29 +300,30 @@ class Swift extends Common {
 				return false;
 			}
 		} catch (BadResponseError $e) {
-			\OC::$server->get(LoggerInterface::class)->error($e->getMessage(), [
+			Server::get(LoggerInterface::class)->error($e->getMessage(), [
 				'exception' => $e,
 				'app' => 'files_external',
 			]);
 			return false;
 		}
 
-		$dateTime = $object->lastModified ? \DateTime::createFromFormat(\DateTime::RFC1123, $object->lastModified) : false;
-		$mtime = $dateTime ? $dateTime->getTimestamp() : null;
-		$objectMetadata = $object->getMetadata();
-		if (isset($objectMetadata['timestamp'])) {
-			$mtime = $objectMetadata['timestamp'];
+		$mtime = null;
+		if (!empty($object->lastModified)) {
+			$dateTime = \DateTime::createFromFormat(\DateTime::RFC1123, $object->lastModified);
+			if ($dateTime !== false) {
+				$mtime = $dateTime->getTimestamp();
+			}
 		}
 
-		if (!empty($mtime)) {
-			$mtime = floor($mtime);
+		if (is_numeric($object->getMetadata()['timestamp'] ?? null)) {
+			$mtime = (float)$object->getMetadata()['timestamp'];
 		}
 
-		$stat = [];
-		$stat['size'] = (int)$object->contentLength;
-		$stat['mtime'] = $mtime;
-		$stat['atime'] = time();
-		return $stat;
+		return [
+			'size' => (int)$object->contentLength,
+			'mtime' => isset($mtime) ? (int)floor($mtime) : null,
+			'atime' => time(),
+		];
 	}
 
 	public function filetype(string $path) {
@@ -352,7 +355,7 @@ class Swift extends Common {
 			$this->objectCache->remove($path . '/');
 		} catch (BadResponseError $e) {
 			if ($e->getResponse()->getStatusCode() !== 404) {
-				\OC::$server->get(LoggerInterface::class)->error($e->getMessage(), [
+				Server::get(LoggerInterface::class)->error($e->getMessage(), [
 					'exception' => $e,
 					'app' => 'files_external',
 				]);
@@ -376,7 +379,7 @@ class Swift extends Common {
 				try {
 					return $this->objectStore->readObject($path);
 				} catch (BadResponseError $e) {
-					\OC::$server->get(LoggerInterface::class)->error($e->getMessage(), [
+					Server::get(LoggerInterface::class)->error($e->getMessage(), [
 						'exception' => $e,
 						'app' => 'files_external',
 					]);
@@ -396,7 +399,7 @@ class Swift extends Common {
 				} else {
 					$ext = '';
 				}
-				$tmpFile = \OC::$server->getTempManager()->getTemporaryFile($ext);
+				$tmpFile = Server::get(ITempManager::class)->getTemporaryFile($ext);
 				// Fetch existing file if required
 				if ($mode[0] !== 'w' && $this->file_exists($path)) {
 					if ($mode[0] === 'x') {
@@ -463,7 +466,7 @@ class Swift extends Common {
 				$this->objectCache->remove($target);
 				$this->objectCache->remove($target . '/');
 			} catch (BadResponseError $e) {
-				\OC::$server->get(LoggerInterface::class)->error($e->getMessage(), [
+				Server::get(LoggerInterface::class)->error($e->getMessage(), [
 					'exception' => $e,
 					'app' => 'files_external',
 				]);
@@ -479,7 +482,7 @@ class Swift extends Common {
 				$this->objectCache->remove($target);
 				$this->objectCache->remove($target . '/');
 			} catch (BadResponseError $e) {
-				\OC::$server->get(LoggerInterface::class)->error($e->getMessage(), [
+				Server::get(LoggerInterface::class)->error($e->getMessage(), [
 					'exception' => $e,
 					'app' => 'files_external',
 				]);

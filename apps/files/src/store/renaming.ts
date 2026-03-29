@@ -2,185 +2,200 @@
  * SPDX-FileCopyrightText: 2023 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import type { Node } from '@nextcloud/files'
-import type { RenamingStore } from '../types'
+
+import type { INode } from '@nextcloud/files'
 
 import axios, { isAxiosError } from '@nextcloud/axios'
 import { emit, subscribe } from '@nextcloud/event-bus'
-import { NodeStatus } from '@nextcloud/files'
-import { DialogBuilder } from '@nextcloud/dialogs'
+import { FileType, NodeStatus } from '@nextcloud/files'
 import { t } from '@nextcloud/l10n'
-import { basename, dirname, extname } from 'path'
+import { basename, dirname, extname } from '@nextcloud/paths'
+import { spawnDialog } from '@nextcloud/vue/functions/dialog'
 import { defineStore } from 'pinia'
-import logger from '../logger'
-import Vue from 'vue'
-import IconCancel from '@mdi/svg/svg/cancel.svg?raw'
-import IconCheck from '@mdi/svg/svg/check.svg?raw'
+import Vue, { defineAsyncComponent, ref } from 'vue'
+import logger from '../logger.ts'
+import { fetchNode } from '../services/WebdavClient.ts'
+import { useUserConfigStore } from './userconfig.ts'
 
-let isDialogVisible = false
+export const useRenamingStore = defineStore('renaming', () => {
+	/**
+	 * The currently renamed node
+	 */
+	const renamingNode = ref<INode>()
+	/**
+	 * The new name of the currently renamed node
+	 */
+	const newNodeName = ref('')
 
-const showWarningDialog = (oldExtension: string, newExtension: string): Promise<boolean> => {
-	if (isDialogVisible) {
-		return Promise.resolve(false)
-	}
+	/**
+	 * Internal flag to only allow calling `rename` once.
+	 */
+	const isRenaming = ref(false)
 
-	isDialogVisible = true
+	/**
+	 * Execute the renaming.
+	 * This will rename the node set as `renamingNode` to the configured new name `newName`.
+	 *
+	 * @return true if success, false if skipped (e.g. new and old name are the same)
+	 * @throws {Error} if renaming fails, details are set in the error message
+	 */
+	async function rename(): Promise<boolean> {
+		if (renamingNode.value === undefined) {
+			throw new Error('No node is currently being renamed')
+		}
 
-	let message
+		const oldName = renamingNode.value.basename
+		let newName = newNodeName.value.trim()
+		if (newName === oldName) {
+			return false
+		}
 
-	if (!oldExtension && newExtension) {
-		message = t(
-			'files',
-			'Adding the file extension "{new}" may render the file unreadable.',
-			{ new: newExtension },
-		)
-	} else if (!newExtension) {
-		message = t(
-			'files',
-			'Removing the file extension "{old}" may render the file unreadable.',
-			{ old: oldExtension },
-		)
-	} else {
-		message = t(
-			'files',
-			'Changing the file extension from "{old}" to "{new}" may render the file unreadable.',
-			{ old: oldExtension, new: newExtension },
-		)
-	}
+		// Only rename once so we use this as some kind of mutex
+		if (isRenaming.value) {
+			return false
+		}
+		isRenaming.value = true
 
-	return new Promise((resolve) => {
-		const dialog = new DialogBuilder()
-			.setName(t('files', 'Change file extension'))
-			.setText(message)
-			.setButtons([
-				{
-					label: t('files', 'Keep {oldextension}', { oldextension: oldExtension }),
-					icon: IconCancel,
-					type: 'secondary',
-					callback: () => {
-						isDialogVisible = false
-						resolve(false)
-					},
-				},
-				{
-					label: newExtension.length ? t('files', 'Use {newextension}', { newextension: newExtension }) : t('files', 'Remove extension'),
-					icon: IconCheck,
-					type: 'primary',
-					callback: () => {
-						isDialogVisible = false
-						resolve(true)
-					},
-				},
-			])
-			.build()
-
-		dialog.show().then(() => {
-			dialog.hide()
-		})
-	})
-}
-
-export const useRenamingStore = function(...args) {
-	const store = defineStore('renaming', {
-		state: () => ({
-			renamingNode: undefined,
-			newName: '',
-		} as RenamingStore),
-
-		actions: {
-			/**
-			 * Execute the renaming.
-			 * This will rename the node set as `renamingNode` to the configured new name `newName`.
-			 * @return true if success, false if skipped (e.g. new and old name are the same)
-			 * @throws Error if renaming fails, details are set in the error message
-			 */
-			async rename(): Promise<boolean> {
-				if (this.renamingNode === undefined) {
-					throw new Error('No node is currently being renamed')
-				}
-
-				const newName = this.newName.trim?.() || ''
-				const oldName = this.renamingNode.basename
-				const oldEncodedSource = this.renamingNode.encodedSource
-
-				// Check for extension change
+		const userConfig = useUserConfigStore()
+		let node = renamingNode.value
+		Vue.set(node, 'status', NodeStatus.LOADING)
+		try {
+			if (userConfig.userConfig.show_dialog_file_extension) {
 				const oldExtension = extname(oldName)
 				const newExtension = extname(newName)
-				if (oldExtension !== newExtension) {
-					const proceed = await showWarningDialog(oldExtension, newExtension)
-					if (!proceed) {
+				// Check for extension change for files
+				if (node.type === FileType.File
+					&& oldExtension !== newExtension
+					&& !(await showFileExtensionDialog(oldExtension, newExtension))
+				) {
+					// user selected to use the old extension
+					newName = basename(newName, newExtension) + oldExtension
+					if (oldName === newName) {
 						return false
 					}
 				}
 
-				if (oldName === newName) {
+				if (!userConfig.userConfig.show_hidden
+					&& newName.startsWith('.')
+					&& !oldName.startsWith('.')
+					&& !(await showHiddenFileDialog(newName))
+				) {
 					return false
 				}
+			}
 
-				const node = this.renamingNode
-				Vue.set(node, 'status', NodeStatus.LOADING)
+			const oldEncodedSource = node.encodedSource
+			// rename the node
+			node.rename(newName)
+			logger.debug('Moving file to', { destination: node.encodedSource, oldEncodedSource })
+			// create MOVE request
+			await axios({
+				method: 'MOVE',
+				url: oldEncodedSource,
+				headers: {
+					Destination: node.encodedSource,
+					Overwrite: 'F',
+				},
+			})
 
-				try {
-					// rename the node
-					this.renamingNode.rename(newName)
-					logger.debug('Moving file to', { destination: this.renamingNode.encodedSource, oldEncodedSource })
-					// create MOVE request
-					await axios({
-						method: 'MOVE',
-						url: oldEncodedSource,
-						headers: {
-							Destination: this.renamingNode.encodedSource,
-							Overwrite: 'F',
+			// Update mime type if extension changed
+			// as other related informations might have changed
+			// on the backend but it is really hard to know on the front
+			if (extname(oldName) !== extname(newName)) {
+				node = await fetchNode(node.path)
+			}
+
+			// Success 🎉
+			emit('files:node:updated', node)
+			emit('files:node:renamed', node)
+			emit('files:node:moved', {
+				node,
+				oldSource: `${dirname(node.source)}/${oldName}`,
+			})
+
+			// Reset the state not changed
+			if (renamingNode.value === node) {
+				$reset()
+			}
+
+			return true
+		} catch (error) {
+			logger.error('Error while renaming file', { error })
+			// Rename back as it failed
+			node.rename(oldName)
+			if (isAxiosError(error)) {
+				// TODO: 409 means current folder does not exist, redirect ?
+				if (error?.response?.status === 404) {
+					throw new Error(t('files', 'Could not rename "{oldName}", it does not exist any more', { oldName }))
+				} else if (error?.response?.status === 412) {
+					throw new Error(t(
+						'files',
+						'The name "{newName}" is already used in the folder "{dir}". Please choose a different name.',
+						{
+							newName,
+							dir: basename(renamingNode.value!.dirname),
 						},
-					})
-
-					// Success 🎉
-					emit('files:node:updated', this.renamingNode as Node)
-					emit('files:node:renamed', this.renamingNode as Node)
-					emit('files:node:moved', {
-						node: this.renamingNode as Node,
-						oldSource: `${dirname(this.renamingNode.source)}/${oldName}`,
-					})
-					this.$reset()
-					return true
-				} catch (error) {
-					logger.error('Error while renaming file', { error })
-					// Rename back as it failed
-					this.renamingNode.rename(oldName)
-					if (isAxiosError(error)) {
-						// TODO: 409 means current folder does not exist, redirect ?
-						if (error?.response?.status === 404) {
-							throw new Error(t('files', 'Could not rename "{oldName}", it does not exist any more', { oldName }))
-						} else if (error?.response?.status === 412) {
-							throw new Error(t(
-								'files',
-								'The name "{newName}" is already used in the folder "{dir}". Please choose a different name.',
-								{
-									newName,
-									dir: basename(this.renamingNode.dirname),
-								},
-							))
-						}
-					}
-					// Unknown error
-					throw new Error(t('files', 'Could not rename "{oldName}"', { oldName }))
-				} finally {
-					Vue.set(node, 'status', undefined)
+					))
 				}
-			},
-		},
-	})
-
-	const renamingStore = store(...args)
-
-	// Make sure we only register the listeners once
-	if (!renamingStore._initialized) {
-		subscribe('files:node:rename', function(node: Node) {
-			renamingStore.renamingNode = node
-			renamingStore.newName = node.basename
-		})
-		renamingStore._initialized = true
+			}
+			// Unknown error
+			throw new Error(t('files', 'Could not rename "{oldName}"', { oldName }))
+		} finally {
+			Vue.set(node, 'status', undefined)
+			isRenaming.value = false
+		}
 	}
 
-	return renamingStore
+	/**
+	 * Reset the store state
+	 */
+	function $reset(): void {
+		newNodeName.value = ''
+		renamingNode.value = undefined
+	}
+
+	// Make sure we only register the listeners once
+	subscribe('files:node:rename', (node: INode) => {
+		renamingNode.value = node
+		newNodeName.value = node.basename
+	})
+
+	return {
+		$reset,
+
+		newNodeName,
+		rename,
+		renamingNode,
+	}
+})
+
+/**
+ * Show a dialog asking user for confirmation about changing the file extension.
+ *
+ * @param oldExtension the old file name extension
+ * @param newExtension the new file name extension
+ */
+async function showFileExtensionDialog(oldExtension: string, newExtension: string): Promise<boolean> {
+	const { promise, resolve } = Promise.withResolvers<boolean>()
+	await spawnDialog(
+		defineAsyncComponent(() => import('../views/DialogConfirmFileExtension.vue')),
+		{ oldExtension, newExtension },
+		resolve,
+	)
+	return promise
+}
+
+/**
+ * Show a dialog asking user for confirmation about renaming a file to a hidden file.
+ *
+ * @param filename - The new filename
+ */
+async function showHiddenFileDialog(filename: string): Promise<boolean> {
+	const { promise, resolve } = Promise.withResolvers<boolean>()
+	await spawnDialog(
+		defineAsyncComponent(() => import('../views/DialogConfirmFileHidden.vue')),
+		{ filename },
+		resolve,
+	)
+	return promise
 }

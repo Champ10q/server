@@ -12,10 +12,10 @@ use OCP\AppFramework\Http;
 /**
  * Prompts the user to download the a file
  * @since 7.0.0
- * @template S of int
- * @template C of string
- * @template H of array<string, mixed>
- * @template-extends Response<int, array<string, mixed>>
+ * @template-covariant S of Http::STATUS_*
+ * @template-covariant C of string
+ * @template-covariant H of array<string, mixed>
+ * @template-extends Response<Http::STATUS_*, array<string, mixed>>
  */
 class DownloadResponse extends Response {
 	/**

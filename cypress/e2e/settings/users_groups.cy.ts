@@ -3,22 +3,29 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { User } from '@nextcloud/cypress'
-import { assertNotExistOrNotVisible, getUserListRow, handlePasswordConfirmation, toggleEditButton } from './usersUtils'
-
-// eslint-disable-next-line n/no-extraneous-import
-import randomString from 'crypto-random-string'
+import { User } from '@nextcloud/e2e-test-server/cypress'
+import { clearState } from '../../support/commonUtils.ts'
+import { randomString } from '../../support/utils/randomString.ts'
+import { assertNotExistOrNotVisible, getUserListRow, handlePasswordConfirmation, toggleEditButton } from './usersUtils.ts'
 
 const admin = new User('admin', 'admin')
 
 describe('Settings: Create groups', () => {
+	let groupName: string
+
+	after(() => {
+		cy.runOccCommand(`group:delete '${groupName!}'`)
+	})
+
 	before(() => {
 		cy.login(admin)
 		cy.visit('/settings/users')
 	})
 
 	it('Can create a group', () => {
-		const groupName = randomString(7)
+		cy.intercept('POST', '**/ocs/v2.php/cloud/groups').as('createGroups')
+
+		groupName = randomString(7)
 		// open the Create group menu
 		cy.get('button[aria-label="Create group"]').click()
 
@@ -35,6 +42,7 @@ describe('Settings: Create groups', () => {
 
 		// Make sure no confirmation modal is shown
 		handlePasswordConfirmation(admin.password)
+		cy.wait('@createGroups').its('response.statusCode').should('eq', 200)
 
 		// see that the created group is in the list
 		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').within(() => {
@@ -48,22 +56,30 @@ describe('Settings: Assign user to a group', { testIsolation: false }, () => {
 	const groupName = randomString(7)
 	let testUser: User
 
-	after(() => cy.deleteUser(testUser))
+	after(() => {
+		cy.deleteUser(testUser)
+		cy.runOccCommand(`group:delete '${groupName}'`)
+	})
+
 	before(() => {
+		clearState()
+
 		cy.createRandomUser().then((user) => {
 			testUser = user
 		})
 		cy.runOccCommand(`group:add '${groupName}'`)
 		cy.login(admin)
+		cy.intercept('GET', '**/ocs/v2.php/cloud/groups/details?search=&offset=*&limit=*').as('loadGroups')
 		cy.visit('/settings/users')
+		cy.wait('@loadGroups')
 	})
 
 	it('see that the group is in the list', () => {
-		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').contains('li', groupName).should('exist')
-		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').contains('li', groupName).within(() => {
-			cy.get('.counter-bubble__counter')
-				.should('not.exist') // is hidden when 0
-		})
+		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').find('li').contains(groupName)
+			.should('exist')
+		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').find('li').contains(groupName)
+			.find('.counter-bubble__counter')
+			.should('not.exist') // is hidden when 0
 	})
 
 	it('see that the user is in the list', () => {
@@ -101,15 +117,14 @@ describe('Settings: Assign user to a group', { testIsolation: false }, () => {
 
 	it('see the group was successfully assigned', () => {
 		// see a new memeber
-		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]')
-			.contains('li', groupName)
+		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').find('li').contains(groupName)
 			.find('.counter-bubble__counter')
 			.should('contain', '1')
 	})
 
 	it('validate the user was added on backend', () => {
 		cy.runOccCommand(`user:info --output=json '${testUser.userId}'`).then((output) => {
-			cy.wrap(output.code).should('eq', 0)
+			cy.wrap(output.exitCode).should('eq', 0)
 			cy.wrap(JSON.parse(output.stdout)?.groups).should('include', groupName)
 		})
 	})
@@ -118,26 +133,31 @@ describe('Settings: Assign user to a group', { testIsolation: false }, () => {
 describe('Settings: Delete an empty group', { testIsolation: false }, () => {
 	const groupName = randomString(7)
 
+	after(() => {
+		cy.runOccCommand(`group:delete '${groupName}'`, { failOnNonZeroExit: false })
+	})
 	before(() => {
 		cy.runOccCommand(`group:add '${groupName}'`)
 		cy.login(admin)
+		cy.intercept('GET', '**/ocs/v2.php/cloud/groups/details?search=&offset=*&limit=*').as('loadGroups')
 		cy.visit('/settings/users')
+		cy.wait('@loadGroups')
 	})
 
 	it('see that the group is in the list', () => {
-		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').within(() => {
-			// see that the list of groups contains the group foo
-			cy.contains(groupName).should('exist').scrollIntoView()
-			// open the actions menu for the group
-			cy.contains('li', groupName).within(() => {
-				cy.get('button.action-item__menutoggle').click({ force: true })
-			})
-		})
+		// see that the list of groups contains the group foo
+		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').find('li').contains(groupName)
+			.should('exist')
+			.scrollIntoView()
+		// open the actions menu for the group
+		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').find('li').contains(groupName)
+			.find('button.action-item__menutoggle')
+			.click({ force: true })
 	})
 
 	it('can delete the group', () => {
-		// The "Remove group" action in the actions menu is shown and clicked
-		cy.get('.action-item__popper button').contains('Remove group').should('exist').click({ force: true })
+		// The "Delete group" action in the actions menu is shown and clicked
+		cy.get('.action-item__popper button').contains('Delete group').should('exist').click({ force: true })
 		// And confirmation dialog accepted
 		cy.get('.modal-container button').contains('Confirm').click({ force: true })
 
@@ -146,10 +166,10 @@ describe('Settings: Delete an empty group', { testIsolation: false }, () => {
 	})
 
 	it('deleted group is not shown anymore', () => {
-		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').within(() => {
-			// see that the list of groups does not contain the group
-			cy.contains(groupName).should('not.exist')
-		})
+		// see that the list of groups does not contain the group
+		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]')
+			.find('li')
+			.should('not.exist')
 		// and also not in database
 		cy.runOccCommand('group:list --output=json').then(($response) => {
 			const groups: string[] = Object.keys(JSON.parse($response.stdout))
@@ -162,6 +182,10 @@ describe('Settings: Delete a non empty group', () => {
 	let testUser: User
 	const groupName = randomString(7)
 
+	after(() => {
+		cy.runOccCommand(`group:delete '${groupName}'`, { failOnNonZeroExit: false })
+	})
+
 	before(() => {
 		cy.runOccCommand(`group:add '${groupName}'`)
 		cy.createRandomUser().then(($user) => {
@@ -169,24 +193,27 @@ describe('Settings: Delete a non empty group', () => {
 			cy.runOccCommand(`group:addUser '${groupName}' '${$user.userId}'`)
 		})
 		cy.login(admin)
+		cy.intercept('GET', '**/ocs/v2.php/cloud/groups/details?search=&offset=*&limit=*').as('loadGroups')
 		cy.visit('/settings/users')
+		cy.wait('@loadGroups')
 	})
 	after(() => cy.deleteUser(testUser))
 
 	it('see that the group is in the list', () => {
 		// see that the list of groups contains the group
-		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').contains('li', groupName).should('exist').scrollIntoView()
+		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').find('li').contains(groupName)
+			.should('exist')
+			.scrollIntoView()
 	})
 
 	it('can delete the group', () => {
 		// open the menu
-		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]')
-			.contains('li', groupName)
+		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').find('li').contains(groupName)
 			.find('button.action-item__menutoggle')
 			.click({ force: true })
 
-		// The "Remove group" action in the actions menu is shown and clicked
-		cy.get('.action-item__popper button').contains('Remove group').should('exist').click({ force: true })
+		// The "Delete group" action in the actions menu is shown and clicked
+		cy.get('.action-item__popper button').contains('Delete group').should('exist').click({ force: true })
 		// And confirmation dialog accepted
 		cy.get('.modal-container button').contains('Confirm').click({ force: true })
 
@@ -195,10 +222,10 @@ describe('Settings: Delete a non empty group', () => {
 	})
 
 	it('deleted group is not shown anymore', () => {
-		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]').within(() => {
-			// see that the list of groups does not contain the group foo
-			cy.contains(groupName).should('not.exist')
-		})
+		// see that the list of groups does not contain the group foo
+		cy.get('ul[data-cy-users-settings-navigation-groups="custom"]')
+			.find('li')
+			.should('not.exist')
 		// and also not in database
 		cy.runOccCommand('group:list --output=json').then(($response) => {
 			const groups: string[] = Object.keys(JSON.parse($response.stdout))
@@ -207,15 +234,10 @@ describe('Settings: Delete a non empty group', () => {
 	})
 })
 
-describe.only('Settings: Sort groups in the UI', () => {
+describe('Settings: Sort groups in the UI', () => {
 	before(() => {
 		// Clear state
-		cy.runOccCommand('group:list --output json').then((output) => {
-			const groups = Object.keys(JSON.parse(output.stdout)).filter((group) => group !== 'admin')
-			groups.forEach((group) => {
-				cy.runOccCommand(`group:delete '${group}'`)
-			})
-		})
+		clearState()
 
 		// Add two groups and add one user to group B
 		cy.runOccCommand('group:add A')
@@ -239,7 +261,7 @@ describe.only('Settings: Sort groups in the UI', () => {
 			// close the settings dialog
 			cy.get('button.modal-container__close').click()
 		})
-		cy.waitUntil(() => cy.get('.modal-container').should(el => assertNotExistOrNotVisible(el)))
+		cy.waitUntil(() => cy.get('.modal-container').should((el) => assertNotExistOrNotVisible(el)))
 	})
 
 	it('See that the groups are sorted by the member count', () => {
@@ -267,7 +289,7 @@ describe.only('Settings: Sort groups in the UI', () => {
 			// close the settings dialog
 			cy.get('button.modal-container__close').click()
 		})
-		cy.waitUntil(() => cy.get('.modal-container').should(el => assertNotExistOrNotVisible(el)))
+		cy.waitUntil(() => cy.get('.modal-container').should((el) => assertNotExistOrNotVisible(el)))
 	})
 
 	it('See that the groups are sorted by the user count', () => {

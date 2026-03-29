@@ -88,7 +88,7 @@ class TrustedServers {
 	public function removeServer(int $id): void {
 		$server = $this->dbHandler->getServerById($id);
 		$this->dbHandler->removeServer($id);
-		$this->dispatcher->dispatchTyped(new TrustedServerRemovedEvent($server['url_hash']));
+		$this->dispatcher->dispatchTyped(new TrustedServerRemovedEvent($server['url_hash'], $server['url']));
 
 	}
 
@@ -96,13 +96,33 @@ class TrustedServers {
 	 * Get all trusted servers
 	 *
 	 * @return list<array{id: int, url: string, url_hash: string, shared_secret: ?string, status: int, sync_token: ?string}>
-	 * @throws Exception
+	 * @throws \Exception
 	 */
-	public function getServers() {
+	public function getServers(): ?array {
 		if ($this->trustedServersCache === null) {
 			$this->trustedServersCache = $this->dbHandler->getAllServer();
 		}
 		return $this->trustedServersCache;
+	}
+
+	/**
+	 * Get a trusted server
+	 *
+	 * @return array{id: int, url: string, url_hash: string, shared_secret: ?string, status: int, sync_token: ?string}
+	 * @throws Exception
+	 */
+	public function getServer(int $id): ?array {
+		if ($this->trustedServersCache === null) {
+			$this->trustedServersCache = $this->dbHandler->getAllServer();
+		}
+
+		foreach ($this->trustedServersCache as $server) {
+			if ($server['id'] === $id) {
+				return $server;
+			}
+		}
+
+		throw new \Exception('No server found with ID: ' . $id);
 	}
 
 	/**
@@ -138,6 +158,7 @@ class TrustedServers {
 				[
 					'timeout' => 3,
 					'connect_timeout' => 3,
+					'verify' => !$this->config->getSystemValue('sharing.federation.allowSelfSignedCertificates', false),
 				]
 			);
 			if ($result->getStatusCode() === Http::STATUS_OK) {
@@ -149,7 +170,6 @@ class TrustedServers {
 			}
 		} catch (\Exception $e) {
 			$this->logger->error('No Nextcloud server.', [
-				'app' => 'federation',
 				'exception' => $e,
 			]);
 			return false;

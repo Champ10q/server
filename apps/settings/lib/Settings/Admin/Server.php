@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -52,6 +53,10 @@ class Server implements IDelegatedSettings {
 		// Profile page
 		$this->initialStateService->provideInitialState('profileEnabledGlobally', $this->profileManager->isProfileEnabled());
 		$this->initialStateService->provideInitialState('profileEnabledByDefault', $this->isProfileEnabledByDefault($this->config));
+		$this->initialStateService->provideInitialState('profilePickerEnabled', $this->isProfilePickerEnabled($this->config));
+
+		// Basic settings
+		$this->initialStateService->provideInitialState('restrictSystemTagsCreationToAdmin', $this->appConfig->getValueBool('systemtags', 'restrict_creation_to_admin', false));
 
 		return new TemplateResponse('settings', 'settings/admin/server', [
 			'profileEnabledGlobally' => $this->profileManager->isProfileEnabled(),
@@ -65,8 +70,8 @@ class Server implements IDelegatedSettings {
 			->orderBy('last_checked', 'ASC')
 			->setMaxResults(1);
 
-		$result = $query->execute();
-		if ($row = $result->fetch()) {
+		$result = $query->executeQuery();
+		if ($row = $result->fetchAssociative()) {
 			$maxAge = (int)$row['last_checked'];
 		} else {
 			$maxAge = $this->timeFactory->getTime();

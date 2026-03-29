@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -6,20 +7,15 @@
  */
 namespace OC\Memcache;
 
+use OCP\ICache;
+
 /**
  * @template-implements \ArrayAccess<string,mixed>
  */
-abstract class Cache implements \ArrayAccess, \OCP\ICache {
-	/**
-	 * @var string $prefix
-	 */
-	protected $prefix;
-
-	/**
-	 * @param string $prefix
-	 */
-	public function __construct($prefix = '') {
-		$this->prefix = $prefix;
+abstract class Cache implements \ArrayAccess, ICache {
+	public function __construct(
+		protected string $prefix = '',
+	) {
 	}
 
 	/**

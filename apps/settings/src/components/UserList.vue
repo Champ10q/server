@@ -5,25 +5,29 @@
 
 <template>
 	<Fragment>
-		<NewUserDialog v-if="showConfig.showNewUserForm"
+		<NewUserDialog
+			v-if="showConfig.showNewUserForm"
 			:loading="loading"
 			:new-user="newUser"
 			:quota-options="quotaOptions"
 			@reset="resetForm"
 			@closing="closeDialog" />
 
-		<NcEmptyContent v-if="filteredUsers.length === 0"
+		<NcEmptyContent
+			v-if="filteredUsers.length === 0"
 			class="empty"
 			:name="isInitialLoad && loading.users ? null : t('settings', 'No accounts')">
 			<template #icon>
-				<NcLoadingIcon v-if="isInitialLoad && loading.users"
-					:name="t('settings', 'Loading accounts …')"
+				<NcLoadingIcon
+					v-if="isInitialLoad && loading.users"
+					:name="t('settings', 'Loading accounts …')"
 					:size="64" />
-				<NcIconSvgWrapper v-else :path="mdiAccountGroup" :size="64" />
+				<NcIconSvgWrapper v-else :path="mdiAccountGroupOutline" :size="64" />
 			</template>
 		</NcEmptyContent>
 
-		<VirtualList v-else
+		<VirtualList
+			v-else
 			:data-component="UserRow"
 			:data-sources="filteredUsers"
 			data-key="id"
@@ -34,8 +38,6 @@
 				users,
 				settings,
 				hasObfuscated,
-				groups,
-				subAdminsGroups,
 				quotaOptions,
 				languages,
 				externalActions,
@@ -52,7 +54,8 @@
 			</template>
 
 			<template #footer>
-				<UserListFooter :loading="loading.users"
+				<UserListFooter
+					:loading="loading.users"
 					:filtered-users="filteredUsers" />
 			</template>
 		</VirtualList>
@@ -60,24 +63,21 @@
 </template>
 
 <script>
-import { mdiAccountGroup } from '@mdi/js'
+import { mdiAccountGroupOutline } from '@mdi/js'
 import { showError } from '@nextcloud/dialogs'
 import { subscribe, unsubscribe } from '@nextcloud/event-bus'
-import { Fragment } from 'vue-frag'
-
 import Vue from 'vue'
-import NcEmptyContent from '@nextcloud/vue/dist/Components/NcEmptyContent.js'
-import NcIconSvgWrapper from '@nextcloud/vue/dist/Components/NcIconSvgWrapper.js'
-import NcLoadingIcon from '@nextcloud/vue/dist/Components/NcLoadingIcon.js'
-
-import VirtualList from './Users/VirtualList.vue'
+import { Fragment } from 'vue-frag'
+import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
+import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
+import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NewUserDialog from './Users/NewUserDialog.vue'
 import UserListFooter from './Users/UserListFooter.vue'
 import UserListHeader from './Users/UserListHeader.vue'
 import UserRow from './Users/UserRow.vue'
-
-import { defaultQuota, isObfuscated, unlimitedQuota } from '../utils/userUtils.ts'
+import VirtualList from './Users/VirtualList.vue'
 import logger from '../logger.ts'
+import { defaultQuota, isObfuscated, unlimitedQuota } from '../utils/userUtils.ts'
 
 const newUser = Object.freeze({
 	id: '',
@@ -113,6 +113,7 @@ export default {
 			type: String,
 			default: null,
 		},
+
 		externalActions: {
 			type: Array,
 			default: () => [],
@@ -122,7 +123,7 @@ export default {
 	setup() {
 		// non reactive properties
 		return {
-			mdiAccountGroup,
+			mdiAccountGroupOutline,
 			rowHeight: 55,
 
 			UserRow,
@@ -136,6 +137,7 @@ export default {
 				groups: false,
 				users: false,
 			},
+
 			newUser: { ...newUser },
 			isInitialLoad: true,
 			searchQuery: '',
@@ -158,7 +160,7 @@ export default {
 		},
 
 		hasObfuscated() {
-			return this.filteredUsers.some(user => isObfuscated(user))
+			return this.filteredUsers.some((user) => isObfuscated(user))
 		},
 
 		users() {
@@ -167,21 +169,14 @@ export default {
 
 		filteredUsers() {
 			if (this.selectedGroup === 'disabled') {
-				return this.users.filter(user => user.enabled === false)
+				return this.users.filter((user) => user.enabled === false)
 			}
-			return this.users.filter(user => user.enabled !== false)
+			return this.users.filter((user) => user.enabled !== false)
 		},
 
 		groups() {
-			// data provided php side + remove the recent and disabled groups
-			return this.$store.getters.getGroups
-				.filter(group => group.id !== '__nc_internal_recent' && group.id !== 'disabled')
-				.sort((a, b) => a.name.localeCompare(b.name))
-		},
-
-		subAdminsGroups() {
-			// data provided php side
-			return this.$store.getters.getSubadminGroups
+			return this.$store.getters.getSortedGroups
+				.filter((group) => group.id !== '__nc_internal_recent' && group.id !== 'disabled')
 		},
 
 		quotaOptions() {
@@ -318,7 +313,7 @@ export default {
 		},
 
 		closeDialog() {
-			this.$store.commit('setShowConfig', {
+			this.$store.dispatch('setShowConfig', {
 				key: 'showNewUserForm',
 				value: false,
 			})
@@ -336,7 +331,7 @@ export default {
 
 		resetForm() {
 			// revert form to original state
-			this.newUser = Object.assign({}, newUser)
+			this.newUser = { ...newUser }
 
 			/**
 			 * Init default language from server data. The use of this.settings
@@ -359,16 +354,18 @@ export default {
 		setNewUserDefaultGroup(value) {
 			// Is no value set, but user is a line manager we set their group as this is a requirement for line manager
 			if (!value && !this.settings.isAdmin && !this.settings.isDelegatedAdmin) {
+				const groups = this.$store.getters.getSubAdminGroups
 				// if there are multiple groups we do not know which to add,
 				// so we cannot make the managers life easier by preselecting it.
-				if (this.groups.length === 1) {
-					value = this.groups[0].id
+				if (groups.length === 1) {
+					this.newUser.groups = [...groups]
 				}
+				return
 			}
 
 			if (value) {
 				// setting new account default group to the current selected one
-				const currentGroup = this.groups.find(group => group.id === value)
+				const currentGroup = this.groups.find((group) => group.id === value)
 				if (currentGroup) {
 					this.newUser.groups = [currentGroup]
 					return
@@ -387,7 +384,7 @@ export default {
 		async redirectIfDisabled() {
 			const allGroups = this.$store.getters.getGroups
 			if (this.selectedGroup === 'disabled'
-						&& allGroups.findIndex(group => group.id === 'disabled' && group.usercount === 0) > -1) {
+				&& allGroups.findIndex((group) => group.id === 'disabled' && group.usercount === 0) > -1) {
 				// disabled group is empty, redirection to all users
 				this.$router.push({ name: 'users' })
 				await this.loadUsers()
@@ -398,7 +395,7 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-@use './Users/shared/styles' as *;
+@use './Users/shared/styles.scss' as *;
 
 .empty {
 	:deep {

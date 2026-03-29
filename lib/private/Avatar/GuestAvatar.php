@@ -8,8 +8,11 @@ declare(strict_types=1);
  */
 namespace OC\Avatar;
 
+use OCP\Color;
 use OCP\Files\SimpleFS\InMemoryFile;
 use OCP\Files\SimpleFS\ISimpleFile;
+use OCP\IConfig;
+use OCP\IImage;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -23,9 +26,10 @@ class GuestAvatar extends Avatar {
 	 */
 	public function __construct(
 		private string $userDisplayName,
+		IConfig $config,
 		LoggerInterface $logger,
 	) {
-		parent::__construct($logger);
+		parent::__construct($config, $logger);
 	}
 
 	/**
@@ -46,7 +50,7 @@ class GuestAvatar extends Avatar {
 	/**
 	 * Setting avatars isn't implemented for guests.
 	 *
-	 * @param \OCP\IImage|resource|string $data
+	 * @param IImage|resource|string $data
 	 */
 	public function set($data): void {
 		// unimplemented for guest user avatars
@@ -85,5 +89,14 @@ class GuestAvatar extends Avatar {
 	 */
 	public function isCustomAvatar(): bool {
 		return false;
+	}
+
+
+	/**
+	 * Different color than for authorized user with the same name
+	 * to make it harder to impersonate people.
+	 */
+	public function avatarBackgroundColor(string $hash): Color {
+		return parent::avatarBackgroundColor($hash . ' (guest)');
 	}
 }

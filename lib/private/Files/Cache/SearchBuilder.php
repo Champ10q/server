@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -12,6 +13,7 @@ use OCP\Files\Search\ISearchBinaryOperator;
 use OCP\Files\Search\ISearchComparison;
 use OCP\Files\Search\ISearchOperator;
 use OCP\Files\Search\ISearchOrder;
+use OCP\FilesMetadata\IFilesMetadataManager;
 use OCP\FilesMetadata\IMetadataQuery;
 
 /**
@@ -62,6 +64,8 @@ class SearchBuilder {
 		'share_with' => 'string',
 		'share_type' => 'integer',
 		'owner' => 'string',
+		'creation_time' => 'integer',
+		'upload_time' => 'integer',
 	];
 
 	/** @var array<string, int|string> */
@@ -80,13 +84,10 @@ class SearchBuilder {
 
 	public const TAG_FAVORITE = '_$!<Favorite>!$_';
 
-	/** @var IMimeTypeLoader */
-	private $mimetypeLoader;
-
 	public function __construct(
-		IMimeTypeLoader $mimetypeLoader,
+		private IMimeTypeLoader $mimetypeLoader,
+		private IFilesMetadataManager $filesMetadataManager,
 	) {
-		$this->mimetypeLoader = $mimetypeLoader;
 	}
 
 	/**
@@ -258,6 +259,8 @@ class SearchBuilder {
 			'share_with' => ['eq'],
 			'share_type' => ['eq'],
 			'owner' => ['eq'],
+			'creation_time' => ['eq', 'gt', 'lt', 'gte', 'lte'],
+			'upload_time' => ['eq', 'gt', 'lt', 'gte', 'lte'],
 		];
 
 		if (!isset(self::$fieldTypes[$operator->getField()])) {
@@ -285,10 +288,17 @@ class SearchBuilder {
 
 
 	private function getExtraOperatorField(ISearchComparison $operator, IMetadataQuery $metadataQuery): array {
-		$paramType = self::$fieldTypes[$operator->getField()];
 		$field = $operator->getField();
 		$value = $operator->getValue();
 		$type = $operator->getType();
+
+		$knownMetadata = $this->filesMetadataManager->getKnownMetadata();
+		$isIndex = $knownMetadata->isIndex($field);
+		$paramType = $knownMetadata->getType($field) === 'int' ? 'integer' : 'string';
+
+		if (!$isIndex) {
+			throw new \InvalidArgumentException('Cannot search non indexed metadata key');
+		}
 
 		switch ($operator->getExtra()) {
 			case IMetadataQuery::EXTRA:
@@ -341,6 +351,10 @@ class SearchBuilder {
 					// use the index, so it instead picks an index for the filtering
 					if ($field === 'mtime') {
 						$field = $query->func()->add($field, $query->createNamedParameter(0));
+					}
+
+					if ($field === 'last_activity') {
+						$field = $query->func()->greatest('file.mtime', $query->createFunction('COALESCE(fe.upload_time, 0)'));
 					}
 			}
 			$query->addOrderBy($field, $order->getDirection());

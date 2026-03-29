@@ -13,13 +13,13 @@ use OCA\TwoFactorBackupCodes\Listener\ProviderEnabled;
 use OCP\Authentication\TwoFactorAuth\IRegistry;
 use OCP\Authentication\TwoFactorAuth\TwoFactorProviderForUserRegistered;
 use OCP\BackgroundJob\IJobList;
-use OCP\EventDispatcher\Event;
 use OCP\IUser;
+use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class ProviderEnabledTest extends TestCase {
-	private IRegistry $registy;
-	private IJobList $jobList;
+	private IRegistry&MockObject $registy;
+	private IJobList&MockObject $jobList;
 	private ProviderEnabled $listener;
 
 	protected function setUp(): void {
@@ -29,14 +29,6 @@ class ProviderEnabledTest extends TestCase {
 		$this->jobList = $this->createMock(IJobList::class);
 
 		$this->listener = new ProviderEnabled($this->registy, $this->jobList);
-	}
-
-	public function testHandleGenericEvent(): void {
-		$event = $this->createMock(Event::class);
-		$this->jobList->expects($this->never())
-			->method($this->anything());
-
-		$this->listener->handle($event);
 	}
 
 	public function testHandleCodesGeneratedEventAlraedyBackupcodes(): void {

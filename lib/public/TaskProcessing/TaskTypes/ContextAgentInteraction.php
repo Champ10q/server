@@ -12,14 +12,14 @@ namespace OCP\TaskProcessing\TaskTypes;
 use OCP\IL10N;
 use OCP\L10N\IFactory;
 use OCP\TaskProcessing\EShapeType;
-use OCP\TaskProcessing\ITaskType;
+use OCP\TaskProcessing\IInternalTaskType;
 use OCP\TaskProcessing\ShapeDescriptor;
 
 /**
  * This is the task processing task type for Context Agent interaction
  * @since 31.0.0
  */
-class ContextAgentInteraction implements ITaskType {
+class ContextAgentInteraction implements IInternalTaskType {
 	public const ID = 'core:contextagent:interaction';
 
 	private IL10N $l;
@@ -31,7 +31,7 @@ class ContextAgentInteraction implements ITaskType {
 	public function __construct(
 		IFactory $l10nFactory,
 	) {
-		$this->l = $l10nFactory->get('core');
+		$this->l = $l10nFactory->get('lib');
 	}
 
 	/**
@@ -39,7 +39,7 @@ class ContextAgentInteraction implements ITaskType {
 	 * @since 31.0.0
 	 */
 	public function getName(): string {
-		return $this->l->t('ContextAgent');
+		return 'ContextAgent'; // We do not translate this
 	}
 
 	/**

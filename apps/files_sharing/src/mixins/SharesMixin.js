@@ -5,21 +5,20 @@
 
 import { getCurrentUser } from '@nextcloud/auth'
 import { showError, showSuccess } from '@nextcloud/dialogs'
-import { ShareType } from '@nextcloud/sharing'
 import { emit } from '@nextcloud/event-bus'
-import { fetchNode } from '../services/WebdavClient.ts'
-
-import PQueue from 'p-queue'
+import { ShareType } from '@nextcloud/sharing'
 import debounce from 'debounce'
-
+import PQueue from 'p-queue'
+import { fetchNode } from '../../../files/src/services/WebdavClient.ts'
+import {
+	ATOMIC_PERMISSIONS,
+	getBundledPermissions,
+} from '../lib/SharePermissionsToolBox.js'
 import Share from '../models/Share.ts'
-import SharesRequests from './ShareRequests.js'
 import Config from '../services/ConfigService.ts'
 import logger from '../services/logger.ts'
-
-import {
-	BUNDLED_PERMISSIONS,
-} from '../lib/SharePermissionsToolBox.js'
+import GeneratePassword from '../utils/GeneratePassword.ts'
+import SharesRequests from './ShareRequests.js'
 
 export default {
 	mixins: [SharesRequests],
@@ -53,6 +52,9 @@ export default {
 			loading: false,
 			saving: false,
 			open: false,
+
+			/** @type {boolean | undefined} */
+			passwordProtectedState: undefined,
 
 			// concurrency management queue
 			// we want one queue per share
@@ -110,6 +112,9 @@ export default {
 				monthFormat: 'MMM',
 			}
 		},
+		isNewShare() {
+			return !this.share.id
+		},
 		isFolder() {
 			return this.fileInfo.type === 'dir'
 		},
@@ -128,17 +133,20 @@ export default {
 				return this.config.isDefaultExpireDateEnforced
 			}
 			if (this.isRemoteShare) {
-			    return this.config.isDefaultRemoteExpireDateEnforced
+				return this.config.isDefaultRemoteExpireDateEnforced
 			}
 			return this.config.isDefaultInternalExpireDateEnforced
 		},
 		hasCustomPermissions() {
+			const basePermissions = getBundledPermissions(true)
 			const bundledPermissions = [
-				BUNDLED_PERMISSIONS.ALL,
-				BUNDLED_PERMISSIONS.READ_ONLY,
-				BUNDLED_PERMISSIONS.FILE_DROP,
+				basePermissions.ALL,
+				basePermissions.ALL_FILE,
+				basePermissions.READ_ONLY,
+				basePermissions.FILE_DROP,
 			]
-			return !bundledPermissions.includes(this.share.permissions)
+			const permissionsWithoutShare = this.share.permissions & ~ATOMIC_PERMISSIONS.SHARE
+			return !bundledPermissions.includes(permissionsWithoutShare)
 		},
 		maxExpirationDateEnforced() {
 			if (this.isExpiryDateEnforced) {
@@ -153,6 +161,35 @@ export default {
 			}
 			return null
 		},
+		/**
+		 * Is the current share password protected ?
+		 *
+		 * @return {boolean}
+		 */
+		isPasswordProtected: {
+			get() {
+				if (this.config.enforcePasswordForPublicLink) {
+					return true
+				}
+				if (this.passwordProtectedState !== undefined) {
+					return this.passwordProtectedState
+				}
+				return typeof this.share.newPassword === 'string'
+					|| typeof this.share.password === 'string'
+			},
+			async set(enabled) {
+				if (enabled) {
+					this.passwordProtectedState = true
+					const generatedPassword = await GeneratePassword(true)
+					if (!this.share.newPassword) {
+						this.$set(this.share, 'newPassword', generatedPassword)
+					}
+				} else {
+					this.passwordProtectedState = false
+					this.$set(this.share, 'newPassword', '')
+				}
+			},
+		},
 	},
 
 	methods: {
@@ -164,7 +201,7 @@ export default {
 		async getNode() {
 			const node = { path: this.path }
 			try {
-				this.node = await fetchNode(node)
+				this.node = await fetchNode(node.path)
 				logger.info('Fetched node:', { node: this.node })
 			} catch (error) {
 				logger.error('Error:', error)
@@ -181,6 +218,11 @@ export default {
 		checkShare(share) {
 			if (share.password) {
 				if (typeof share.password !== 'string' || share.password.trim() === '') {
+					return false
+				}
+			}
+			if (share.newPassword) {
+				if (typeof share.newPassword !== 'string') {
 					return false
 				}
 			}
@@ -209,17 +251,14 @@ export default {
 		 *
 		 * @param {Date} date
 		 */
-		onExpirationChange: debounce(function(date) {
-			this.share.expireDate = this.formatDateToString(new Date(date))
-		}, 500),
-		/**
-		 * Uncheck expire date
-		 * We need this method because @update:checked
-		 * is ran simultaneously as @uncheck, so
-		 * so we cannot ensure data is up-to-date
-		 */
-		onExpirationDisable() {
-			this.share.expireDate = ''
+		onExpirationChange(date) {
+			if (!date) {
+				this.share.expireDate = null
+				this.$set(this.share, 'expireDate', null)
+				return
+			}
+			const parsedDate = (date instanceof Date) ? date : new Date(date)
+			this.share.expireDate = this.formatDateToString(parsedDate)
 		},
 
 		/**
@@ -251,7 +290,7 @@ export default {
 				this.loading = true
 				this.open = false
 				await this.deleteShare(this.share.id)
-				console.debug('Share deleted', this.share.id)
+				logger.debug('Share deleted', { shareId: this.share.id })
 				const message = this.share.itemType === 'file'
 					? t('files_sharing', 'File "{path}" has been unshared', { path: this.share.path })
 					: t('files_sharing', 'Folder "{path}" has been unshared', { path: this.share.path })
@@ -259,7 +298,7 @@ export default {
 				this.$emit('remove:share', this.share)
 				await this.getNode()
 				emit('files:node:updated', this.node)
-			} catch (error) {
+			} catch {
 				// re-open menu if error
 				this.open = true
 			} finally {
@@ -282,22 +321,32 @@ export default {
 				const properties = {}
 				// force value to string because that is what our
 				// share api controller accepts
-				propertyNames.forEach(name => {
-					if ((typeof this.share[name]) === 'object') {
+				for (const name of propertyNames) {
+					if (name === 'password') {
+						if (this.share.newPassword !== undefined) {
+							properties[name] = this.share.newPassword
+						}
+						continue
+					}
+
+					if (this.share[name] === null || this.share[name] === undefined) {
+						properties[name] = ''
+					} else if ((typeof this.share[name]) === 'object') {
 						properties[name] = JSON.stringify(this.share[name])
 					} else {
 						properties[name] = this.share[name].toString()
 					}
-				})
+				}
 
-				this.updateQueue.add(async () => {
+				return this.updateQueue.add(async () => {
 					this.saving = true
 					this.errors = {}
 					try {
 						const updatedShare = await this.updateShare(this.share.id, properties)
 
-						if (propertyNames.indexOf('password') >= 0) {
+						if (propertyNames.includes('password')) {
 							// reset password state after sync
+							this.share.password = this.share.newPassword || undefined
 							this.$delete(this.share, 'newPassword')
 
 							// updates password expiration time after sync
@@ -305,14 +354,18 @@ export default {
 						}
 
 						// clear any previous errors
-						this.$delete(this.errors, propertyNames[0])
+						for (const property of propertyNames) {
+							this.$delete(this.errors, property)
+						}
 						showSuccess(this.updateSuccessMessage(propertyNames))
 					} catch (error) {
 						logger.error('Could not update share', { error, share: this.share, propertyNames })
 
 						const { message } = error
 						if (message && message !== '') {
-							this.onSyncError(propertyNames[0], message)
+							for (const property of propertyNames) {
+								this.onSyncError(property, message)
+							}
 							showError(message)
 						} else {
 							// We do not have information what happened, but we should still inform the user
@@ -322,11 +375,10 @@ export default {
 						this.saving = false
 					}
 				})
-				return
 			}
 
 			// This share does not exists on the server yet
-			console.debug('Updated local share', this.share)
+			logger.debug('Updated local share', { share: this.share })
 		},
 
 		/**
@@ -338,20 +390,20 @@ export default {
 			}
 
 			switch (names[0]) {
-			case 'expireDate':
-				return t('files_sharing', 'Share expiry date saved')
-			case 'hideDownload':
-				return t('files_sharing', 'Share hide-download state saved')
-			case 'label':
-				return t('files_sharing', 'Share label saved')
-			case 'note':
-				return t('files_sharing', 'Share note for recipient saved')
-			case 'password':
-				return t('files_sharing', 'Share password saved')
-			case 'permissions':
-				return t('files_sharing', 'Share permissions saved')
-			default:
-				return t('files_sharing', 'Share saved')
+				case 'expireDate':
+					return t('files_sharing', 'Share expiry date saved')
+				case 'hideDownload':
+					return t('files_sharing', 'Share hide-download state saved')
+				case 'label':
+					return t('files_sharing', 'Share label saved')
+				case 'note':
+					return t('files_sharing', 'Share note for recipient saved')
+				case 'password':
+					return t('files_sharing', 'Share password saved')
+				case 'permissions':
+					return t('files_sharing', 'Share permissions saved')
+				default:
+					return t('files_sharing', 'Share saved')
 			}
 		},
 
@@ -362,38 +414,45 @@ export default {
 		 * @param {string} message the error message
 		 */
 		onSyncError(property, message) {
+			if (property === 'password' && this.share.newPassword !== undefined) {
+				if (this.share.newPassword === this.share.password) {
+					this.share.password = ''
+				}
+				this.$delete(this.share, 'newPassword')
+			}
+
 			// re-open menu if closed
 			this.open = true
 			switch (property) {
-			case 'password':
-			case 'pending':
-			case 'expireDate':
-			case 'label':
-			case 'note': {
+				case 'password':
+				case 'pending':
+				case 'expireDate':
+				case 'label':
+				case 'note': {
 				// show error
-				this.$set(this.errors, property, message)
+					this.$set(this.errors, property, message)
 
-				let propertyEl = this.$refs[property]
-				if (propertyEl) {
-					if (propertyEl.$el) {
-						propertyEl = propertyEl.$el
+					let propertyEl = this.$refs[property]
+					if (propertyEl) {
+						if (propertyEl.$el) {
+							propertyEl = propertyEl.$el
+						}
+						// focus if there is a focusable action element
+						const focusable = propertyEl.querySelector('.focusable')
+						if (focusable) {
+							focusable.focus()
+						}
 					}
-					// focus if there is a focusable action element
-					const focusable = propertyEl.querySelector('.focusable')
-					if (focusable) {
-						focusable.focus()
-					}
+					break
 				}
-				break
-			}
-			case 'sendPasswordByTalk': {
+				case 'sendPasswordByTalk': {
 				// show error
-				this.$set(this.errors, property, message)
+					this.$set(this.errors, property, message)
 
-				// Restore previous state
-				this.share.sendPasswordByTalk = !this.share.sendPasswordByTalk
-				break
-			}
+					// Restore previous state
+					this.share.sendPasswordByTalk = !this.share.sendPasswordByTalk
+					break
+				}
 			}
 		},
 		/**

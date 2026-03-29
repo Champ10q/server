@@ -9,11 +9,15 @@ declare(strict_types=1);
 
 namespace OCP;
 
+use OCP\AppFramework\Attribute\Consumable;
+
 /**
  * @since 31.0.0
  */
-class ServerVersion {
+#[Consumable(since: '31.0.0')]
+readonly class ServerVersion {
 
+	/** @var int[] */
 	private array $version;
 	private string $versionString;
 	private string $build;
@@ -59,6 +63,7 @@ class ServerVersion {
 	}
 
 	/**
+	 * @return int[]
 	 * @since 31.0.0
 	 */
 	public function getVersion(): array {
@@ -77,6 +82,12 @@ class ServerVersion {
 	 * @since 31.0.0
 	 */
 	public function getChannel(): string {
+		$updaterChannel = Server::get(IConfig::class)->getSystemValueString('updater.release.channel', $this->channel);
+
+		if (in_array($updaterChannel, ['beta', 'stable', 'enterprise', 'git'], true)) {
+			return $updaterChannel;
+		}
+
 		return $this->channel;
 	}
 
@@ -97,6 +108,5 @@ class ServerVersion {
 			$version .= ' Build:' . $build;
 		}
 		return $version;
-
 	}
 }

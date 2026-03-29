@@ -36,7 +36,7 @@ class MoveAvatarsBackgroundJob extends QueuedJob {
 		}
 	}
 
-	public function run($arguments) {
+	public function run($argument) {
 		$this->logger->info('Started migrating avatars to AppData folder');
 		$this->moveAvatars();
 		$this->logger->info('All avatars migrated to AppData folder');
@@ -49,7 +49,7 @@ class MoveAvatarsBackgroundJob extends QueuedJob {
 		}
 
 		$counter = 0;
-		$this->userManager->callForSeenUsers(function (IUser $user) use (&$counter) {
+		$this->userManager->callForSeenUsers(function (IUser $user) use (&$counter): void {
 			$uid = $user->getUID();
 
 			$path = 'avatars/' . $this->buildOwnCloudAvatarPath($uid);

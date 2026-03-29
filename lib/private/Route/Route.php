@@ -14,7 +14,7 @@ class Route extends SymfonyRoute implements IRoute {
 	/**
 	 * Specify the method when this route is to be used
 	 *
-	 * @param string $method HTTP method (uppercase)
+	 * @param string|array $method HTTP method
 	 * @return \OC\Route\Route
 	 */
 	public function method($method) {
@@ -124,15 +124,9 @@ class Route extends SymfonyRoute implements IRoute {
 	 * The action to execute when this route matches, includes a file like
 	 * it is called directly
 	 * @param string $file
-	 * @return void
 	 */
 	public function actionInclude($file) {
-		$function = function ($param) use ($file) {
-			unset($param['_route']);
-			$_GET = array_merge($_GET, $param);
-			unset($param);
-			require_once "$file";
-		} ;
-		$this->action($function);
+		$this->setDefault('file', $file);
+		return $this;
 	}
 }

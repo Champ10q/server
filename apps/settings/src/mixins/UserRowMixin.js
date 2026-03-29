@@ -4,6 +4,7 @@
  */
 
 import { formatFileSize } from '@nextcloud/files'
+import { useFormatDateTime } from '@nextcloud/vue'
 
 export default {
 	props: {
@@ -14,14 +15,6 @@ export default {
 		settings: {
 			type: Object,
 			default: () => ({}),
-		},
-		groups: {
-			type: Array,
-			default: () => [],
-		},
-		subAdminsGroups: {
-			type: Array,
-			default: () => [],
 		},
 		quotaOptions: {
 			type: Array,
@@ -36,36 +29,21 @@ export default {
 			default: () => [],
 		},
 	},
+	setup(props) {
+		const { formattedFullTime } = useFormatDateTime(props.user.firstLoginTimestamp * 1000, {
+			relativeTime: false,
+			format: {
+				timeStyle: 'short',
+				dateStyle: 'short',
+			},
+		})
+		return {
+			formattedFullTime,
+		}
+	},
 	computed: {
 		showConfig() {
 			return this.$store.getters.getShowConfig
-		},
-
-		/* GROUPS MANAGEMENT */
-		userGroups() {
-			const userGroups = this.groups.filter(group => this.user.groups.includes(group.id))
-			return userGroups
-		},
-		userSubAdminsGroups() {
-			const userSubAdminsGroups = this.subAdminsGroups.filter(group => this.user.subadmin.includes(group.id))
-			return userSubAdminsGroups
-		},
-		availableGroups() {
-			return this.groups.map((group) => {
-				// clone object because we don't want
-				// to edit the original groups
-				const groupClone = Object.assign({}, group)
-
-				// two settings here:
-				// 1. user NOT in group but no permission to add
-				// 2. user is in group but no permission to remove
-				groupClone.$isDisabled
-					= (group.canAdd === false
-						&& !this.user.groups.includes(group.id))
-					|| (group.canRemove === false
-						&& this.user.groups.includes(group.id))
-				return groupClone
-			})
 		},
 
 		/* QUOTA MANAGEMENT */
@@ -91,7 +69,7 @@ export default {
 			if (this.user.quota.quota >= 0) {
 				// if value is valid, let's map the quotaOptions or return custom quota
 				const humanQuota = formatFileSize(this.user.quota.quota)
-				const userQuota = this.quotaOptions.find(quota => quota.id === humanQuota)
+				const userQuota = this.quotaOptions.find((quota) => quota.id === humanQuota)
 				return userQuota || { id: humanQuota, label: humanQuota }
 			} else if (this.user.quota.quota === 'default') {
 				// default quota is replaced by the proper value on load
@@ -108,7 +86,7 @@ export default {
 		/* LANGUAGE */
 		userLanguage() {
 			const availableLanguages = this.languages[0].languages.concat(this.languages[1].languages)
-			const userLang = availableLanguages.find(lang => lang.code === this.user.language)
+			const userLang = availableLanguages.find((lang) => lang.code === this.user.language)
 			if (typeof userLang !== 'object' && this.user.language !== '') {
 				return {
 					code: this.user.language,
@@ -120,18 +98,42 @@ export default {
 			return userLang
 		},
 
+		userFirstLogin() {
+			if (this.user.firstLoginTimestamp > 0) {
+				return this.formattedFullTime
+			}
+			if (this.user.firstLoginTimestamp < 0) {
+				return t('settings', 'Unknown')
+			}
+			return t('settings', 'Never')
+		},
+
 		/* LAST LOGIN */
 		userLastLoginTooltip() {
-			if (this.user.lastLogin > 0) {
-				return OC.Util.formatDate(this.user.lastLogin)
+			if (this.user.lastLoginTimestamp > 0) {
+				return OC.Util.formatDate(this.user.lastLoginTimestamp * 1000)
 			}
 			return ''
 		},
 		userLastLogin() {
-			if (this.user.lastLogin > 0) {
-				return OC.Util.relativeModifiedDate(this.user.lastLogin)
+			if (this.user.lastLoginTimestamp > 0) {
+				return OC.Util.relativeModifiedDate(this.user.lastLoginTimestamp * 1000)
 			}
 			return t('settings', 'Never')
+		},
+
+		userGroups() {
+			const allGroups = this.$store.getters.getGroups
+			return this.user.groups
+				.map((id) => allGroups.find((g) => g.id === id))
+				.filter((group) => group !== undefined)
+		},
+
+		userSubAdminGroups() {
+			const allGroups = this.$store.getters.getGroups
+			return this.user.subadmin
+				.map((id) => allGroups.find((g) => g.id === id))
+				.filter((group) => group !== undefined)
 		},
 	},
 }

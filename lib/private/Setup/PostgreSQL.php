@@ -8,18 +8,19 @@
 namespace OC\Setup;
 
 use OC\DatabaseException;
+use OC\DatabaseSetupException;
 use OC\DB\Connection;
 use OC\DB\QueryBuilder\Literal;
 use OCP\Security\ISecureRandom;
+use OCP\Server;
 
 class PostgreSQL extends AbstractDatabase {
 	public $dbprettyname = 'PostgreSQL';
 
 	/**
-	 * @param string $username
-	 * @throws \OC\DatabaseSetupException
+	 * @throws DatabaseSetupException
 	 */
-	public function setupDatabase($username) {
+	public function setupDatabase(): void {
 		try {
 			$connection = $this->connect([
 				'dbname' => 'postgres'
@@ -35,7 +36,7 @@ class PostgreSQL extends AbstractDatabase {
 					->andWhere($builder->expr()->eq('rolname', $builder->createNamedParameter($this->dbUser)));
 
 				try {
-					$result = $query->execute();
+					$result = $query->executeQuery();
 					$canCreateRoles = $result->rowCount() > 0;
 				} catch (DatabaseException $e) {
 					$canCreateRoles = false;
@@ -46,9 +47,9 @@ class PostgreSQL extends AbstractDatabase {
 					//use the admin login data for the new database user
 
 					//add prefix to the postgresql user name to prevent collisions
-					$this->dbUser = 'oc_' . strtolower($username);
+					$this->dbUser = 'oc_admin';
 					//create a new password so we don't need to store the admin config in the config file
-					$this->dbPassword = \OC::$server->get(ISecureRandom::class)->generate(30, ISecureRandom::CHAR_ALPHANUMERIC);
+					$this->dbPassword = Server::get(ISecureRandom::class)->generate(30, ISecureRandom::CHAR_ALPHANUMERIC);
 
 					$this->createDBUser($connection);
 				}
@@ -97,17 +98,17 @@ class PostgreSQL extends AbstractDatabase {
 			$this->logger->error($e->getMessage(), [
 				'exception' => $e,
 			]);
-			throw new \OC\DatabaseSetupException($this->trans->t('PostgreSQL Login and/or password not valid'),
+			throw new DatabaseSetupException($this->trans->t('PostgreSQL Login and/or password not valid'),
 				$this->trans->t('You need to enter details of an existing account.'), 0, $e);
 		}
 	}
 
-	private function createDatabase(Connection $connection) {
+	private function createDatabase(Connection $connection): void {
 		if (!$this->databaseExists($connection)) {
 			//The database does not exists... let's create it
 			$query = $connection->prepare('CREATE DATABASE ' . addslashes($this->dbName) . ' OWNER "' . addslashes($this->dbUser) . '"');
 			try {
-				$query->execute();
+				$query->executeStatement();
 			} catch (DatabaseException $e) {
 				$this->logger->error('Error while trying to create database', [
 					'exception' => $e,
@@ -116,7 +117,7 @@ class PostgreSQL extends AbstractDatabase {
 		} else {
 			$query = $connection->prepare('REVOKE ALL PRIVILEGES ON DATABASE ' . addslashes($this->dbName) . ' FROM PUBLIC');
 			try {
-				$query->execute();
+				$query->executeStatement();
 			} catch (DatabaseException $e) {
 				$this->logger->error('Error while trying to restrict database permissions', [
 					'exception' => $e,
@@ -125,7 +126,7 @@ class PostgreSQL extends AbstractDatabase {
 		}
 	}
 
-	private function userExists(Connection $connection) {
+	private function userExists(Connection $connection): bool {
 		$builder = $connection->getQueryBuilder();
 		$builder->automaticTablePrefix(false);
 		$query = $builder->select('*')
@@ -135,7 +136,7 @@ class PostgreSQL extends AbstractDatabase {
 		return $result->rowCount() > 0;
 	}
 
-	private function databaseExists(Connection $connection) {
+	private function databaseExists(Connection $connection): bool {
 		$builder = $connection->getQueryBuilder();
 		$builder->automaticTablePrefix(false);
 		$query = $builder->select('datname')
@@ -145,7 +146,7 @@ class PostgreSQL extends AbstractDatabase {
 		return $result->rowCount() > 0;
 	}
 
-	private function createDBUser(Connection $connection) {
+	private function createDBUser(Connection $connection): void {
 		$dbUser = $this->dbUser;
 		try {
 			$i = 1;
@@ -156,10 +157,10 @@ class PostgreSQL extends AbstractDatabase {
 
 			// create the user
 			$query = $connection->prepare('CREATE USER "' . addslashes($this->dbUser) . "\" CREATEDB PASSWORD '" . addslashes($this->dbPassword) . "'");
-			$query->execute();
+			$query->executeStatement();
 			if ($this->databaseExists($connection)) {
 				$query = $connection->prepare('GRANT CONNECT ON DATABASE ' . addslashes($this->dbName) . ' TO "' . addslashes($this->dbUser) . '"');
-				$query->execute();
+				$query->executeStatement();
 			}
 		} catch (DatabaseException $e) {
 			$this->logger->error('Error while trying to create database user', [

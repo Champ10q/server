@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2019-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2017 ownCloud, Inc.
@@ -11,9 +12,8 @@ use OC\Diagnostics\QueryLogger;
 use Test\TestCase;
 
 class QueryLoggerTest extends TestCase {
-	/** @var \OC\Diagnostics\QueryLogger */
-	private $logger;
-	
+	private QueryLogger $logger;
+
 	protected function setUp(): void {
 		parent::setUp();
 

@@ -18,6 +18,7 @@ use OCP\Http\Client\LocalServerException;
 use OCP\ICertificateManager;
 use OCP\IConfig;
 use OCP\Security\IRemoteHostValidator;
+use OCP\ServerVersion;
 use Psr\Log\LoggerInterface;
 use function parse_url;
 
@@ -27,25 +28,14 @@ use function parse_url;
  * @package OC\Http
  */
 class Client implements IClient {
-	/** @var GuzzleClient */
-	private $client;
-	/** @var IConfig */
-	private $config;
-	/** @var ICertificateManager */
-	private $certificateManager;
-	private IRemoteHostValidator $remoteHostValidator;
-
 	public function __construct(
-		IConfig $config,
-		ICertificateManager $certificateManager,
-		GuzzleClient $client,
-		IRemoteHostValidator $remoteHostValidator,
+		private IConfig $config,
+		private ICertificateManager $certificateManager,
+		private GuzzleClient $client,
+		private IRemoteHostValidator $remoteHostValidator,
 		protected LoggerInterface $logger,
+		protected ServerVersion $serverVersion,
 	) {
-		$this->config = $config;
-		$this->client = $client;
-		$this->certificateManager = $certificateManager;
-		$this->remoteHostValidator = $remoteHostValidator;
 	}
 
 	private function buildRequestOptions(array $options): array {
@@ -54,7 +44,10 @@ class Client implements IClient {
 		$defaults = [
 			RequestOptions::VERIFY => $this->getCertBundle(),
 			RequestOptions::TIMEOUT => IClient::DEFAULT_REQUEST_TIMEOUT,
+			// Prefer HTTP/2 globally (PSR-7 request version)
+			RequestOptions::VERSION => '2.0',
 		];
+		$defaults['curl'][\CURLOPT_HTTP_VERSION] = \CURL_HTTP_VERSION_2TLS;
 
 		$options['nextcloud']['allow_local_address'] = $this->isLocalAddressAllowed($options);
 		if ($options['nextcloud']['allow_local_address'] === false) {
@@ -62,7 +55,7 @@ class Client implements IClient {
 				\Psr\Http\Message\RequestInterface $request,
 				\Psr\Http\Message\ResponseInterface $response,
 				\Psr\Http\Message\UriInterface $uri,
-			) use ($options) {
+			) use ($options): void {
 				$this->preventLocalAddress($uri->__toString(), $options);
 			};
 
@@ -81,11 +74,23 @@ class Client implements IClient {
 		$options = array_merge($defaults, $options);
 
 		if (!isset($options[RequestOptions::HEADERS]['User-Agent'])) {
-			$options[RequestOptions::HEADERS]['User-Agent'] = 'Nextcloud Server Crawler';
+			$userAgent = 'Nextcloud-Server-Crawler/' . $this->serverVersion->getVersionString();
+			$overwriteCliUrl = $this->config->getSystemValueString('overwrite.cli.url');
+			if ($this->config->getSystemValueBool('http_client_add_user_agent_url') && !empty($overwriteCliUrl)) {
+				$userAgent .= '; +' . rtrim($overwriteCliUrl, '/');
+			}
+			$options[RequestOptions::HEADERS]['User-Agent'] = $userAgent;
 		}
 
-		if (!isset($options[RequestOptions::HEADERS]['Accept-Encoding'])) {
-			$options[RequestOptions::HEADERS]['Accept-Encoding'] = 'gzip';
+		// Ensure headers array exists and set Accept-Encoding only if not present
+		$headers = $options[RequestOptions::HEADERS] ?? [];
+		if (!isset($headers['Accept-Encoding'])) {
+			$acceptEnc = 'gzip';
+			if (function_exists('brotli_uncompress')) {
+				$acceptEnc = 'br, ' . $acceptEnc;
+			}
+			$options[RequestOptions::HEADERS] = $headers; // ensure headers are present
+			$options[RequestOptions::HEADERS]['Accept-Encoding'] = $acceptEnc;
 		}
 
 		// Fallback for save_to
@@ -102,7 +107,7 @@ class Client implements IClient {
 		// $this->certificateManager->getAbsoluteBundlePath() tries to instantiate
 		// a view
 		if (!$this->config->getSystemValueBool('installed', false)) {
-			return \OC::$SERVERROOT . '/resources/config/ca-bundle.crt';
+			return $this->certificateManager->getDefaultCertificatesBundlePath();
 		}
 
 		return $this->certificateManager->getAbsoluteBundlePath();
@@ -149,8 +154,8 @@ class Client implements IClient {
 	}
 
 	private function isLocalAddressAllowed(array $options) : bool {
-		if (($options['nextcloud']['allow_local_address'] ?? false) ||
-			$this->config->getSystemValueBool('allow_local_remote_servers', false)) {
+		if (($options['nextcloud']['allow_local_address'] ?? false)
+			|| $this->config->getSystemValueBool('allow_local_remote_servers', false)) {
 			return true;
 		}
 

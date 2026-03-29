@@ -13,9 +13,9 @@ use OCP\AppFramework\Http;
  * Class StreamResponse
  *
  * @since 8.1.0
- * @template S of int
- * @template H of array<string, mixed>
- * @template-extends Response<int, array<string, mixed>>
+ * @template-covariant S of Http::STATUS_*
+ * @template-covariant H of array<string, mixed>
+ * @template-extends Response<Http::STATUS_*, array<string, mixed>>
  */
 class StreamResponse extends Response implements ICallbackResponse {
 	/** @var string */

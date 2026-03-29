@@ -1,4 +1,7 @@
 <?php
+
+declare(strict_types=1);
+
 /**
  * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -6,22 +9,19 @@
 namespace OC\AppFramework\OCS;
 
 use OCP\AppFramework\Http;
-use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\OCSController;
 
 /**
- * @psalm-import-type DataResponseType from DataResponse
- * @template S of int
- * @template-covariant T of DataResponseType
- * @template H of array<string, mixed>
- * @template-extends BaseResponse<int, DataResponseType, array<string, mixed>>
+ * @template-covariant S of Http::STATUS_*
+ * @template-covariant H of array<string, mixed>
+ * @template-extends BaseResponse<Http::STATUS_*, mixed, array<string, mixed>>
  */
 class V2Response extends BaseResponse {
 	/**
 	 * The V2 endpoint just passes on status codes.
 	 * Of course we have to map the OCS specific codes to proper HTTP status codes
 	 *
-	 * @return int
+	 * @return Http::STATUS_*
 	 */
 	public function getStatus() {
 		$status = parent::getStatus();

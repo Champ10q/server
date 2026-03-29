@@ -4,16 +4,20 @@
  */
 
 import type { FileStat, ResponseDataDetailed } from 'webdav'
-import type { ServerTagWithId, Tag, TagWithId } from '../types.js'
+import type { ServerTagWithId, Tag, TagWithId } from '../types.ts'
 
 import { t } from '@nextcloud/l10n'
-
-import { createTag, fetchTagsPayload } from './api.js'
-import { davClient } from './davClient.js'
-import { formatTag, parseTags } from '../utils.js'
 import logger from '../logger.ts'
+import { formatTag, parseTags } from '../utils.ts'
+import { createTag, fetchTagsPayload } from './api.ts'
+import { davClient } from './davClient.ts'
 
-export const fetchTagsForFile = async (fileId: number): Promise<TagWithId[]> => {
+/**
+ * Fetch all tags for a given file (by id).
+ *
+ * @param fileId - The id of the file to fetch tags for
+ */
+export async function fetchTagsForFile(fileId: number): Promise<TagWithId[]> {
 	const path = '/systemtags-relations/files/' + fileId
 	try {
 		const { data: tags } = await davClient.getDirectoryContents(path, {
@@ -35,7 +39,7 @@ export const fetchTagsForFile = async (fileId: number): Promise<TagWithId[]> => 
  * @param tag The tag to create
  * @param fileId Id of the file to tag
  */
-export const createTagForFile = async (tag: Tag, fileId: number): Promise<number> => {
+export async function createTagForFile(tag: Tag, fileId: number): Promise<number> {
 	const tagToCreate = formatTag(tag)
 	const tagId = await createTag(tagToCreate)
 	const tagToSet: ServerTagWithId = {
@@ -46,7 +50,13 @@ export const createTagForFile = async (tag: Tag, fileId: number): Promise<number
 	return tagToSet.id
 }
 
-export const setTagForFile = async (tag: TagWithId | ServerTagWithId, fileId: number): Promise<void> => {
+/**
+ * Set a tag for a given file (by id).
+ *
+ * @param tag - The tag to set
+ * @param fileId - The id of the file to set the tag for
+ */
+export async function setTagForFile(tag: TagWithId | ServerTagWithId, fileId: number): Promise<void> {
 	const path = '/systemtags-relations/files/' + fileId + '/' + tag.id
 	const tagToPut = formatTag(tag)
 	try {
@@ -60,7 +70,13 @@ export const setTagForFile = async (tag: TagWithId | ServerTagWithId, fileId: nu
 	}
 }
 
-export const deleteTagForFile = async (tag: TagWithId, fileId: number): Promise<void> => {
+/**
+ * Delete a tag for a given file (by id).
+ *
+ * @param tag - The tag to delete
+ * @param fileId - The id of the file to delete the tag for
+ */
+export async function deleteTagForFile(tag: TagWithId, fileId: number): Promise<void> {
 	const path = '/systemtags-relations/files/' + fileId + '/' + tag.id
 	try {
 		await davClient.deleteFile(path)

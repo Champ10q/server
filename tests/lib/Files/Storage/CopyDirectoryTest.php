@@ -1,12 +1,15 @@
 <?php
+
+declare(strict_types=1);
+
 /**
  * SPDX-FileCopyrightText: 2019-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
  * SPDX-License-Identifier: AGPL-3.0-only
  */
-
 namespace Test\Files\Storage;
 
+use OC\Files\Storage\PolyFill\CopyDirectory;
 use OC\Files\Storage\Temporary;
 
 class StorageNoRecursiveCopy extends Temporary {
@@ -19,16 +22,16 @@ class StorageNoRecursiveCopy extends Temporary {
 }
 
 class CopyDirectoryStorage extends StorageNoRecursiveCopy {
-	use \OC\Files\Storage\PolyFill\CopyDirectory;
+	use CopyDirectory;
 }
 
 /**
  * Class CopyDirectoryTest
  *
- * @group DB
  *
  * @package Test\Files\Storage
  */
+#[\PHPUnit\Framework\Attributes\Group('DB')]
 class CopyDirectoryTest extends Storage {
 	protected function setUp(): void {
 		parent::setUp();

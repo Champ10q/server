@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 /**
  * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -14,39 +16,42 @@ use OCP\Files\Cache\IPropagator;
 use OCP\Files\Cache\IScanner;
 use OCP\Files\Cache\IUpdater;
 use OCP\Files\Cache\IWatcher;
+use OCP\Files\GenericFileException;
 use OCP\Files\Storage\ILockingStorage;
 use OCP\Files\Storage\IStorage;
 use OCP\Files\Storage\IWriteStreamStorage;
 use OCP\Lock\ILockingProvider;
 use OCP\Server;
+use Override;
 use Psr\Log\LoggerInterface;
 
-class Wrapper implements \OC\Files\Storage\Storage, ILockingStorage, IWriteStreamStorage {
-	/**
-	 * @var \OC\Files\Storage\Storage $storage
-	 */
-	protected $storage;
+class Wrapper implements Storage, ILockingStorage, IWriteStreamStorage {
+	protected ?Storage $storage = null;
 
-	public $cache;
-	public $scanner;
-	public $watcher;
-	public $propagator;
-	public $updater;
+	public ?ICache $cache = null;
+
+	public ?IScanner $scanner = null;
+
+	public ?IWatcher $watcher = null;
+
+	public ?IPropagator $propagator = null;
+
+	public ?IUpdater $updater = null;
 
 	/**
-	 * @param array $parameters
+	 * @param array{storage: Storage} $parameters
 	 */
 	public function __construct(array $parameters) {
 		$this->storage = $parameters['storage'];
 	}
 
 	public function getWrapperStorage(): Storage {
-		if (!$this->storage) {
-			$message = 'storage wrapper ' . get_class($this) . " doesn't have a wrapped storage set";
-			$logger = Server::get(LoggerInterface::class);
-			$logger->error($message);
+		if (!$this->storage instanceof Storage) {
+			$message = 'storage wrapper ' . static::class . " doesn't have a wrapped storage set";
+			Server::get(LoggerInterface::class)->error($message);
 			$this->storage = new FailedStorage(['exception' => new \Exception($message)]);
 		}
+
 		return $this->storage;
 	}
 
@@ -167,16 +172,18 @@ class Wrapper implements \OC\Files\Storage\Storage, ILockingStorage, IWriteStrea
 	}
 
 	public function getCache(string $path = '', ?IStorage $storage = null): ICache {
-		if (!$storage) {
+		if (!$storage instanceof IStorage) {
 			$storage = $this;
 		}
+
 		return $this->getWrapperStorage()->getCache($path, $storage);
 	}
 
 	public function getScanner(string $path = '', ?IStorage $storage = null): IScanner {
-		if (!$storage) {
+		if (!$storage instanceof IStorage) {
 			$storage = $this;
 		}
+
 		return $this->getWrapperStorage()->getScanner($path, $storage);
 	}
 
@@ -185,23 +192,26 @@ class Wrapper implements \OC\Files\Storage\Storage, ILockingStorage, IWriteStrea
 	}
 
 	public function getWatcher(string $path = '', ?IStorage $storage = null): IWatcher {
-		if (!$storage) {
+		if (!$storage instanceof IStorage) {
 			$storage = $this;
 		}
+
 		return $this->getWrapperStorage()->getWatcher($path, $storage);
 	}
 
 	public function getPropagator(?IStorage $storage = null): IPropagator {
-		if (!$storage) {
+		if (!$storage instanceof IStorage) {
 			$storage = $this;
 		}
+
 		return $this->getWrapperStorage()->getPropagator($storage);
 	}
 
 	public function getUpdater(?IStorage $storage = null): IUpdater {
-		if (!$storage) {
+		if (!$storage instanceof IStorage) {
 			$storage = $this;
 		}
+
 		return $this->getWrapperStorage()->getUpdater($storage);
 	}
 
@@ -222,11 +232,7 @@ class Wrapper implements \OC\Files\Storage\Storage, ILockingStorage, IWriteStrea
 	}
 
 	public function instanceOfStorage(string $class): bool {
-		if (ltrim($class, '\\') === 'OC\Files\Storage\Shared') {
-			// FIXME Temporary fix to keep existing checks working
-			$class = '\OCA\Files_Sharing\SharedStorage';
-		}
-		return is_a($this, $class) or $this->getWrapperStorage()->instanceOfStorage($class);
+		return is_a($this, $class) || $this->getWrapperStorage()->instanceOfStorage($class);
 	}
 
 	/**
@@ -240,11 +246,14 @@ class Wrapper implements \OC\Files\Storage\Storage, ILockingStorage, IWriteStrea
 			if ($storage instanceof $class) {
 				break;
 			}
+
 			$storage = $storage->getWrapperStorage();
 		}
+
 		if (!($storage instanceof $class)) {
 			return null;
 		}
+
 		return $storage;
 	}
 
@@ -257,8 +266,15 @@ class Wrapper implements \OC\Files\Storage\Storage, ILockingStorage, IWriteStrea
 		return call_user_func_array([$this->getWrapperStorage(), $method], $args);
 	}
 
+	#[Override]
 	public function getDirectDownload(string $path): array|false {
+		/** @psalm-suppress DeprecatedMethod */
 		return $this->getWrapperStorage()->getDirectDownload($path);
+	}
+
+	#[Override]
+	public function getDirectDownloadById(string $fileId): array|false {
+		return $this->getWrapperStorage()->getDirectDownloadById($fileId);
 	}
 
 	public function getAvailability(): array {
@@ -294,20 +310,23 @@ class Wrapper implements \OC\Files\Storage\Storage, ILockingStorage, IWriteStrea
 	}
 
 	public function acquireLock(string $path, int $type, ILockingProvider $provider): void {
-		if ($this->getWrapperStorage()->instanceOfStorage('\OCP\Files\Storage\ILockingStorage')) {
-			$this->getWrapperStorage()->acquireLock($path, $type, $provider);
+		$storage = $this->getWrapperStorage();
+		if ($storage->instanceOfStorage(ILockingStorage::class)) {
+			$storage->acquireLock($path, $type, $provider);
 		}
 	}
 
 	public function releaseLock(string $path, int $type, ILockingProvider $provider): void {
-		if ($this->getWrapperStorage()->instanceOfStorage('\OCP\Files\Storage\ILockingStorage')) {
-			$this->getWrapperStorage()->releaseLock($path, $type, $provider);
+		$storage = $this->getWrapperStorage();
+		if ($storage->instanceOfStorage(ILockingStorage::class)) {
+			$storage->releaseLock($path, $type, $provider);
 		}
 	}
 
 	public function changeLock(string $path, int $type, ILockingProvider $provider): void {
-		if ($this->getWrapperStorage()->instanceOfStorage('\OCP\Files\Storage\ILockingStorage')) {
-			$this->getWrapperStorage()->changeLock($path, $type, $provider);
+		$storage = $this->getWrapperStorage();
+		if ($storage->instanceOfStorage(ILockingStorage::class)) {
+			$storage->changeLock($path, $type, $provider);
 		}
 	}
 
@@ -320,13 +339,21 @@ class Wrapper implements \OC\Files\Storage\Storage, ILockingStorage, IWriteStrea
 		if ($storage->instanceOfStorage(IWriteStreamStorage::class)) {
 			/** @var IWriteStreamStorage $storage */
 			return $storage->writeStream($path, $stream, $size);
-		} else {
-			$target = $this->fopen($path, 'w');
-			[$count, $result] = \OC_Helper::streamCopy($stream, $target);
-			fclose($stream);
-			fclose($target);
-			return $count;
 		}
+
+		$target = $this->fopen($path, 'w');
+		if ($target === false) {
+			throw new GenericFileException('Failed to open ' . $path);
+		}
+
+		$count = stream_copy_to_stream($stream, $target);
+		fclose($stream);
+		fclose($target);
+		if ($count === false) {
+			throw new GenericFileException('Failed to copy stream.');
+		}
+
+		return $count;
 	}
 
 	public function getDirectoryContent(string $directory): \Traversable {
@@ -338,9 +365,11 @@ class Wrapper implements \OC\Files\Storage\Storage, ILockingStorage, IWriteStrea
 		if ($wrapped === $storage) {
 			return true;
 		}
+
 		if ($wrapped instanceof Wrapper) {
 			return $wrapped->isWrapperOf($storage);
 		}
+
 		return false;
 	}
 

@@ -3,8 +3,8 @@
   - SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 <template>
-	<NcSettingsSection data-cy-settings-sharing-section
-		:limit-width="true"
+	<NcSettingsSection
+		data-cy-settings-sharing-section
 		:doc-url="documentationLink"
 		:name="t('settings', 'Sharing')"
 		:description="t('settings', 'As admin you can fine-tune the sharing behavior. Please see the documentation for more information.')">
@@ -16,13 +16,11 @@
 </template>
 
 <script lang="ts">
-import {
-	NcNoteCard,
-	NcSettingsSection,
-} from '@nextcloud/vue'
 import { loadState } from '@nextcloud/initial-state'
-import { translate as t } from '@nextcloud/l10n'
+import { t } from '@nextcloud/l10n'
 import { defineComponent } from 'vue'
+import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
+import NcSettingsSection from '@nextcloud/vue/components/NcSettingsSection'
 import AdminSettingsSharingForm from '../components/AdminSettingsSharingForm.vue'
 
 export default defineComponent({
@@ -32,12 +30,14 @@ export default defineComponent({
 		NcNoteCard,
 		NcSettingsSection,
 	},
+
 	data() {
 		return {
 			documentationLink: loadState<string>('settings', 'sharingDocumentation', ''),
 			sharingAppEnabled: loadState<boolean>('settings', 'sharingAppEnabled', false),
 		}
 	},
+
 	methods: {
 		t,
 	},

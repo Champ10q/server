@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -63,12 +64,12 @@ class Cache extends CacheJail {
 				/** @var Jail $currentStorage */
 				$absoluteRoot = $currentStorage->getJailedPath($absoluteRoot);
 			}
-			$this->root = $absoluteRoot;
+			$this->root = $absoluteRoot ?? '';
 		}
 		return $this->root;
 	}
 
-	protected function getGetUnjailedRoot() {
+	public function getGetUnjailedRoot(): string {
 		return $this->sourceRootInfo->getPath();
 	}
 
@@ -190,5 +191,9 @@ class Cache extends CacheJail {
 		} else {
 			return null;
 		}
+	}
+
+	public function markRootChanged(): void {
+		$this->rootUnchanged = false;
 	}
 }

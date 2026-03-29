@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -75,7 +76,7 @@ class BulkUploadPlugin extends ServerPlugin {
 					'error' => false,
 					'etag' => $node->getETag(),
 					'fileid' => DavUtil::getDavFileId($node->getId()),
-					'permissions' => DavUtil::getDavPermissions($node),
+					'permissions' => DavUtil::getDavPermissions($node, $node->getParent()),
 				];
 			} catch (\Exception $e) {
 				$this->logger->error($e->getMessage(), ['path' => $headers['x-file-path']]);

@@ -16,24 +16,15 @@ use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IUser;
 use OCP\Security\IHasher;
 use OCP\Security\ISecureRandom;
+use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class BackupCodeStorageTest extends TestCase {
-
-	/** @var BackupCodeMapper|\PHPUnit\Framework\MockObject\MockObject */
-	private $mapper;
-
-	/** @var ISecureRandom|\PHPUnit\Framework\MockObject\MockObject */
-	private $random;
-
-	/** @var IHasher|\PHPUnit\Framework\MockObject\MockObject */
-	private $hasher;
-
-	/** @var IEventDispatcher|\PHPUnit\Framework\MockObject\MockObject */
-	private $eventDispatcher;
-
-	/** @var BackupCodeStorage */
-	private $storage;
+	private BackupCodeMapper&MockObject $mapper;
+	private ISecureRandom&MockObject $random;
+	private IHasher&MockObject $hasher;
+	private IEventDispatcher&MockObject $eventDispatcher;
+	private BackupCodeStorage $storage;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -111,7 +102,7 @@ class BackupCodeStorageTest extends TestCase {
 		$code1 = new BackupCode();
 		$code1->setUsed(1);
 		$code2 = new BackupCode();
-		$code2->setUsed('0');
+		$code2->setUsed(0);
 		$codes = [
 			$code1,
 			$code2,
@@ -177,7 +168,7 @@ class BackupCodeStorageTest extends TestCase {
 	public function testValidateUsedCode(): void {
 		$user = $this->createMock(IUser::class);
 		$code = new BackupCode();
-		$code->setUsed('1');
+		$code->setUsed(1);
 		$code->setCode('HASHEDVALUE');
 		$codes = [
 			$code,

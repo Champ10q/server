@@ -18,45 +18,28 @@ use OCP\INavigationManager;
 use OCP\IRequest;
 use OCP\IURLGenerator;
 use OCP\IUserSession;
+use OCP\Server;
 use RuntimeException;
 
-/**
- * Class to generate URLs
- */
 class URLGenerator implements IURLGenerator {
-	/** @var IConfig */
-	private $config;
-	/** @var IUserSession */
-	public $userSession;
-	/** @var ICacheFactory */
-	private $cacheFactory;
-	/** @var IRequest */
-	private $request;
-	/** @var Router */
-	private $router;
-	/** @var null|string */
-	private $baseUrl = null;
+	private ?string $baseUrl = null;
 	private ?IAppManager $appManager = null;
 	private ?INavigationManager $navigationManager = null;
 
-	public function __construct(IConfig $config,
-		IUserSession $userSession,
-		ICacheFactory $cacheFactory,
-		IRequest $request,
-		Router $router,
+	public function __construct(
+		private IConfig $config,
+		public IUserSession $userSession,
+		private ICacheFactory $cacheFactory,
+		private IRequest $request,
+		private Router $router,
 	) {
-		$this->config = $config;
-		$this->userSession = $userSession;
-		$this->cacheFactory = $cacheFactory;
-		$this->request = $request;
-		$this->router = $router;
 	}
 
 	private function getAppManager(): IAppManager {
 		if ($this->appManager !== null) {
 			return $this->appManager;
 		}
-		$this->appManager = \OCP\Server::get(IAppManager::class);
+		$this->appManager = Server::get(IAppManager::class);
 		return $this->appManager;
 	}
 
@@ -64,7 +47,7 @@ class URLGenerator implements IURLGenerator {
 		if ($this->navigationManager !== null) {
 			return $this->navigationManager;
 		}
-		$this->navigationManager = \OCP\Server::get(INavigationManager::class);
+		$this->navigationManager = Server::get(INavigationManager::class);
 		return $this->navigationManager;
 	}
 
@@ -189,14 +172,14 @@ class URLGenerator implements IURLGenerator {
 		$basename = substr(basename($file), 0, -4);
 
 		try {
-			$appPath = $this->getAppManager()->getAppPath($appName);
-		} catch (AppPathNotFoundException $e) {
 			if ($appName === 'core' || $appName === '') {
 				$appName = 'core';
 				$appPath = false;
 			} else {
-				throw new RuntimeException('image not found: image: ' . $file . ' webroot: ' . \OC::$WEBROOT . ' serverroot: ' . \OC::$SERVERROOT);
+				$appPath = $this->getAppManager()->getAppPath($appName);
 			}
+		} catch (AppPathNotFoundException $e) {
+			throw new RuntimeException('image not found: image: ' . $file . ' webroot: ' . \OC::$WEBROOT . ' serverroot: ' . \OC::$SERVERROOT);
 		}
 
 		// Check if the app is in the app folder
@@ -204,7 +187,7 @@ class URLGenerator implements IURLGenerator {
 		$themingEnabled = $this->config->getSystemValueBool('installed', false) && $this->getAppManager()->isEnabledForUser('theming');
 		$themingImagePath = false;
 		if ($themingEnabled) {
-			$themingDefaults = \OC::$server->get('ThemingDefaults');
+			$themingDefaults = Server::get('ThemingDefaults');
 			if ($themingDefaults instanceof ThemingDefaults) {
 				$themingImagePath = $themingDefaults->replaceImagePath($appName, $file);
 			}
@@ -215,9 +198,9 @@ class URLGenerator implements IURLGenerator {
 		} elseif (!file_exists(\OC::$SERVERROOT . "/themes/$theme/apps/$appName/img/$basename.svg")
 			&& file_exists(\OC::$SERVERROOT . "/themes/$theme/apps/$appName/img/$basename.png")) {
 			$path = \OC::$WEBROOT . "/themes/$theme/apps/$appName/img/$basename.png";
-		} elseif (!empty($appName) and file_exists(\OC::$SERVERROOT . "/themes/$theme/$appName/img/$file")) {
+		} elseif (!empty($appName) && file_exists(\OC::$SERVERROOT . "/themes/$theme/$appName/img/$file")) {
 			$path = \OC::$WEBROOT . "/themes/$theme/$appName/img/$file";
-		} elseif (!empty($appName) and (!file_exists(\OC::$SERVERROOT . "/themes/$theme/$appName/img/$basename.svg")
+		} elseif (!empty($appName) && (!file_exists(\OC::$SERVERROOT . "/themes/$theme/$appName/img/$basename.svg")
 			&& file_exists(\OC::$SERVERROOT . "/themes/$theme/$appName/img/$basename.png"))) {
 			$path = \OC::$WEBROOT . "/themes/$theme/$appName/img/$basename.png";
 		} elseif (file_exists(\OC::$SERVERROOT . "/themes/$theme/core/img/$file")) {
@@ -232,9 +215,9 @@ class URLGenerator implements IURLGenerator {
 		} elseif ($appPath && !file_exists($appPath . "/img/$basename.svg")
 			&& file_exists($appPath . "/img/$basename.png")) {
 			$path = $this->getAppManager()->getAppWebPath($appName) . "/img/$basename.png";
-		} elseif (!empty($appName) and file_exists(\OC::$SERVERROOT . "/$appName/img/$file")) {
+		} elseif (!empty($appName) && file_exists(\OC::$SERVERROOT . "/$appName/img/$file")) {
 			$path = \OC::$WEBROOT . "/$appName/img/$file";
-		} elseif (!empty($appName) and (!file_exists(\OC::$SERVERROOT . "/$appName/img/$basename.svg")
+		} elseif (!empty($appName) && (!file_exists(\OC::$SERVERROOT . "/$appName/img/$basename.svg")
 				&& file_exists(\OC::$SERVERROOT . "/$appName/img/$basename.png"))) {
 			$path = \OC::$WEBROOT . "/$appName/img/$basename.png";
 		} elseif (file_exists(\OC::$SERVERROOT . "/core/img/$file")) {
@@ -277,7 +260,7 @@ class URLGenerator implements IURLGenerator {
 	 * @return string url to the online documentation
 	 */
 	public function linkToDocs(string $key): string {
-		$theme = \OC::$server->get('ThemingDefaults');
+		$theme = Server::get('ThemingDefaults');
 		return $theme->buildDocLinkToKey($key);
 	}
 
@@ -304,6 +287,11 @@ class URLGenerator implements IURLGenerator {
 		if ($href === '') {
 			throw new \InvalidArgumentException('Default navigation entry is missing href: ' . $entryId);
 		}
+
+		if (str_starts_with($href, $this->getBaseUrl())) {
+			return $href;
+		}
+
 		if (str_starts_with($href, '/index.php/') && ($this->config->getSystemValueBool('htaccess.IgnoreFrontController', false) || getenv('front_controller_active') === 'true')) {
 			$href = substr($href, 10);
 		}

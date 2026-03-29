@@ -41,7 +41,13 @@ class ResetPassword extends Base {
 				'password-from-env',
 				null,
 				InputOption::VALUE_NONE,
-				'read password from environment variable OC_PASS'
+				'read password from environment variable NC_PASS/OC_PASS'
+			)
+			->addOption(
+				'no-password',
+				null,
+				InputOption::VALUE_NONE,
+				'Sets the password to blank'
 			)
 		;
 	}
@@ -56,9 +62,9 @@ class ResetPassword extends Base {
 		}
 
 		if ($input->getOption('password-from-env')) {
-			$password = getenv('OC_PASS');
+			$password = getenv('NC_PASS') ?: getenv('OC_PASS');
 			if (!$password) {
-				$output->writeln('<error>--password-from-env given, but OC_PASS is empty!</error>');
+				$output->writeln('<error>--password-from-env given, but NC_PASS/OC_PASS is empty!</error>');
 				return 1;
 			}
 		} elseif ($input->isInteractive()) {
@@ -76,22 +82,32 @@ class ResetPassword extends Base {
 				}
 			}
 
-			$question = new Question('Enter a new password: ');
-			$question->setHidden(true);
-			$password = $helper->ask($input, $output, $question);
+			if ($input->getOption('no-password')) {
+				$question = new ConfirmationQuestion('Are you sure you want to clear the password for ' . $username . '?');
 
-			if ($password === null) {
-				$output->writeln('<error>Password cannot be empty!</error>');
-				return 1;
-			}
+				if (!$helper->ask($input, $output, $question)) {
+					return 1;
+				}
 
-			$question = new Question('Confirm the new password: ');
-			$question->setHidden(true);
-			$confirm = $helper->ask($input, $output, $question);
+				$password = '';
+			} else {
+				$question = new Question('Enter a new password: ');
+				$question->setHidden(true);
+				$password = $helper->ask($input, $output, $question);
 
-			if ($password !== $confirm) {
-				$output->writeln('<error>Passwords did not match!</error>');
-				return 1;
+				if ($password === null) {
+					$output->writeln('<error>Password cannot be empty!</error>');
+					return 1;
+				}
+
+				$question = new Question('Confirm the new password: ');
+				$question->setHidden(true);
+				$confirm = $helper->ask($input, $output, $question);
+
+				if ($password !== $confirm) {
+					$output->writeln('<error>Passwords did not match!</error>');
+					return 1;
+				}
 			}
 		} else {
 			$output->writeln('<error>Interactive input or --password-from-env is needed for entering a new password!</error>');
@@ -122,7 +138,7 @@ class ResetPassword extends Base {
 	 */
 	public function completeArgumentValues($argumentName, CompletionContext $context) {
 		if ($argumentName === 'user') {
-			return array_map(static fn (IUser $user) => $user->getUID(), $this->userManager->search($context->getCurrentWord()));
+			return array_map(static fn (IUser $user) => $user->getUID(), $this->userManager->searchDisplayName($context->getCurrentWord()));
 		}
 		return [];
 	}

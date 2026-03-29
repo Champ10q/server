@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -7,22 +8,23 @@ namespace OC\DB;
 
 use Doctrine\DBAL\Exception;
 use Doctrine\DBAL\Platforms\AbstractPlatform;
+use Doctrine\DBAL\Platforms\OraclePlatform;
 use Doctrine\DBAL\Schema\Schema;
 use OCP\DB\ISchemaWrapper;
+use OCP\Server;
+use Psr\Log\LoggerInterface;
 
 class SchemaWrapper implements ISchemaWrapper {
-	/** @var Connection */
-	protected $connection;
+	protected Schema $schema;
 
-	/** @var Schema */
-	protected $schema;
+	/** @var array<string, true> */
+	protected array $tablesToDelete = [];
 
-	/** @var array */
-	protected $tablesToDelete = [];
-
-	public function __construct(Connection $connection, ?Schema $schema = null) {
-		$this->connection = $connection;
-		if ($schema) {
+	public function __construct(
+		protected Connection $connection,
+		?Schema $schema = null,
+	) {
+		if ($schema !== null) {
 			$this->schema = $schema;
 		} else {
 			$this->schema = $this->connection->createSchema();
@@ -33,7 +35,7 @@ class SchemaWrapper implements ISchemaWrapper {
 		return $this->schema;
 	}
 
-	public function performDropTableCalls() {
+	public function performDropTableCalls(): void {
 		foreach ($this->tablesToDelete as $tableName => $true) {
 			$this->connection->dropTable($tableName);
 			foreach ($this->connection->getShardConnections() as $shardConnection) {
@@ -129,5 +131,19 @@ class SchemaWrapper implements ISchemaWrapper {
 	 */
 	public function getDatabasePlatform() {
 		return $this->connection->getDatabasePlatform();
+	}
+
+	public function dropAutoincrementColumn(string $table, string $column): void {
+		$tableObj = $this->schema->getTable($this->connection->getPrefix() . $table);
+		$tableObj->modifyColumn('id', ['autoincrement' => false]);
+		$platform = $this->getDatabasePlatform();
+		if ($platform instanceof OraclePlatform) {
+			try {
+				$this->connection->executeStatement('DROP TRIGGER "' . $this->connection->getPrefix() . $table . '_AI_PK"');
+				$this->connection->executeStatement('DROP SEQUENCE "' . $this->connection->getPrefix() . $table . '_SEQ"');
+			} catch (Exception $e) {
+				Server::get(LoggerInterface::class)->error($e->getMessage(), ['exception' => $e]);
+			}
+		}
 	}
 }

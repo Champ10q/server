@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -8,6 +9,7 @@ namespace OC\Lockdown\Filesystem;
 use Icewind\Streams\IteratorDirectory;
 use OC\Files\FileInfo;
 use OC\Files\Storage\Common;
+use OC\ForbiddenException;
 use OCP\Files\Cache\ICache;
 use OCP\Files\Storage\IStorage;
 
@@ -21,15 +23,15 @@ class NullStorage extends Common {
 	}
 
 	public function mkdir(string $path): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function rmdir(string $path): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function opendir(string $path): IteratorDirectory {
-		return new IteratorDirectory([]);
+		return new IteratorDirectory();
 	}
 
 	public function is_dir(string $path): bool {
@@ -41,7 +43,7 @@ class NullStorage extends Common {
 	}
 
 	public function stat(string $path): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function filetype(string $path): string|false {
@@ -49,7 +51,7 @@ class NullStorage extends Common {
 	}
 
 	public function filesize(string $path): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function isCreatable(string $path): bool {
@@ -85,35 +87,35 @@ class NullStorage extends Common {
 	}
 
 	public function file_get_contents(string $path): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function file_put_contents(string $path, mixed $data): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function unlink(string $path): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function rename(string $source, string $target): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function copy(string $source, string $target): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function fopen(string $path, string $mode): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function getMimeType(string $path): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function hash(string $type, string $path, bool $raw = false): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function free_space(string $path): int {
@@ -121,7 +123,7 @@ class NullStorage extends Common {
 	}
 
 	public function touch(string $path, ?int $mtime = null): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function getLocalFile(string $path): string|false {
@@ -144,12 +146,16 @@ class NullStorage extends Common {
 		return false;
 	}
 
+	public function getDirectDownloadById(string $fileId): array|false {
+		return false;
+	}
+
 	public function copyFromStorage(IStorage $sourceStorage, string $sourceInternalPath, string $targetInternalPath, bool $preserveMtime = false): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function moveFromStorage(IStorage $sourceStorage, string $sourceInternalPath, string $targetInternalPath): never {
-		throw new \OC\ForbiddenException('This request is not allowed to access the filesystem');
+		throw new ForbiddenException('This request is not allowed to access the filesystem');
 	}
 
 	public function test(): bool {

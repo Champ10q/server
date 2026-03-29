@@ -12,19 +12,23 @@ use Closure;
 use OCP\AppFramework\QueryException;
 use OCP\IContainer;
 use Pimple\Container;
+use Psr\Container\ContainerExceptionInterface;
 use Psr\Container\ContainerInterface;
+use Psr\Log\LoggerInterface;
 use ReflectionClass;
 use ReflectionException;
 use ReflectionNamedType;
 use ReflectionParameter;
+use RuntimeException;
 use function class_exists;
 
 /**
  * SimpleContainer is a simple implementation of a container on basis of Pimple
  */
 class SimpleContainer implements ArrayAccess, ContainerInterface, IContainer {
-	/** @var Container */
-	private $container;
+	public static bool $useLazyObjects = false;
+
+	private Container $container;
 
 	public function __construct() {
 		$this->container = new Container();
@@ -33,10 +37,7 @@ class SimpleContainer implements ArrayAccess, ContainerInterface, IContainer {
 	/**
 	 * @template T
 	 * @param class-string<T>|string $id
-	 * @return T|mixed
-	 * @psalm-template S as class-string<T>|string
-	 * @psalm-param S $id
-	 * @psalm-return (S is class-string<T> ? T : mixed)
+	 * @return ($id is class-string<T> ? T : mixed)
 	 */
 	public function get(string $id): mixed {
 		return $this->query($id);
@@ -49,16 +50,33 @@ class SimpleContainer implements ArrayAccess, ContainerInterface, IContainer {
 
 	/**
 	 * @param ReflectionClass $class the class to instantiate
-	 * @return \stdClass the created class
+	 * @param list<class-string> $chain
+	 * @return object the created class
 	 * @suppress PhanUndeclaredClassInstanceof
 	 */
-	private function buildClass(ReflectionClass $class) {
+	private function buildClass(ReflectionClass $class, array $chain): object {
 		$constructor = $class->getConstructor();
 		if ($constructor === null) {
+			/* No constructor, return a instance directly */
 			return $class->newInstance();
 		}
+		if (PHP_VERSION_ID >= 80400 && self::$useLazyObjects && !$class->isInternal()) {
+			/* For PHP>=8.4, use a lazy ghost to delay constructor and dependency resolving */
+			/** @psalm-suppress UndefinedMethod */
+			return $class->newLazyGhost(function (object $object) use ($constructor, $chain): void {
+				/** @psalm-suppress DirectConstructorCall For lazy ghosts we have to call the constructor directly */
+				$object->__construct(...$this->buildClassConstructorParameters($constructor, $chain));
+			});
+		} else {
+			return $class->newInstanceArgs($this->buildClassConstructorParameters($constructor, $chain));
+		}
+	}
 
-		return $class->newInstanceArgs(array_map(function (ReflectionParameter $parameter) {
+	/**
+	 * @param list<class-string> $chain
+	 */
+	private function buildClassConstructorParameters(\ReflectionMethod $constructor, array $chain): array {
+		return array_map(function (ReflectionParameter $parameter) use ($chain) {
 			$parameterType = $parameter->getType();
 
 			$resolveName = $parameter->getName();
@@ -69,10 +87,10 @@ class SimpleContainer implements ArrayAccess, ContainerInterface, IContainer {
 			}
 
 			try {
-				$builtIn = $parameter->hasType() && ($parameter->getType() instanceof ReflectionNamedType)
-					&& $parameter->getType()->isBuiltin();
-				return $this->query($resolveName, !$builtIn);
-			} catch (QueryException $e) {
+				$builtIn = $parameterType !== null && ($parameterType instanceof ReflectionNamedType)
+							&& $parameterType->isBuiltin();
+				return $this->query($resolveName, !$builtIn, $chain);
+			} catch (ContainerExceptionInterface $e) {
 				// Service not found, use the default value when available
 				if ($parameter->isDefaultValueAvailable()) {
 					return $parameter->getDefaultValue();
@@ -81,8 +99,8 @@ class SimpleContainer implements ArrayAccess, ContainerInterface, IContainer {
 				if ($parameterType !== null && ($parameterType instanceof ReflectionNamedType) && !$parameterType->isBuiltin()) {
 					$resolveName = $parameter->getName();
 					try {
-						return $this->query($resolveName);
-					} catch (QueryException $e2) {
+						return $this->query($resolveName, chain: $chain);
+					} catch (ContainerExceptionInterface $e2) {
 						// Pass null if typed and nullable
 						if ($parameter->allowsNull() && ($parameterType instanceof ReflectionNamedType)) {
 							return null;
@@ -95,18 +113,22 @@ class SimpleContainer implements ArrayAccess, ContainerInterface, IContainer {
 
 				throw $e;
 			}
-		}, $constructor->getParameters()));
+		}, $constructor->getParameters());
 	}
 
-	public function resolve($name) {
+	/**
+	 * @inheritDoc
+	 * @param list<class-string> $chain
+	 */
+	public function resolve(string $name, array $chain = []): mixed {
 		$baseMsg = 'Could not resolve ' . $name . '!';
 		try {
 			$class = new ReflectionClass($name);
 			if ($class->isInstantiable()) {
-				return $this->buildClass($class);
+				return $this->buildClass($class, $chain);
 			} else {
-				throw new QueryException($baseMsg .
-					' Class can not be instantiated');
+				throw new QueryException($baseMsg
+					. ' Class can not be instantiated');
 			}
 		} catch (ReflectionException $e) {
 			// Class does not exist
@@ -114,14 +136,22 @@ class SimpleContainer implements ArrayAccess, ContainerInterface, IContainer {
 		}
 	}
 
-	public function query(string $name, bool $autoload = true) {
+	/**
+	 * @inheritDoc
+	 * @param list<class-string> $chain
+	 */
+	public function query(string $name, bool $autoload = true, array $chain = []): mixed {
 		$name = $this->sanitizeName($name);
 		if (isset($this->container[$name])) {
 			return $this->container[$name];
 		}
 
 		if ($autoload) {
-			$object = $this->resolve($name);
+			if (in_array($name, $chain, true)) {
+				throw new RuntimeException('Tried to query ' . $name . ', but it is already in the chain: ' . implode(', ', $chain));
+			}
+
+			$object = $this->resolve($name, array_merge($chain, [$name]));
 			$this->registerService($name, function () use ($object) {
 				return $object;
 			});
@@ -131,35 +161,22 @@ class SimpleContainer implements ArrayAccess, ContainerInterface, IContainer {
 		throw new QueryNotFoundException('Could not resolve ' . $name . '!');
 	}
 
-	/**
-	 * @param string $name
-	 * @param mixed $value
-	 */
-	public function registerParameter($name, $value) {
+	public function registerParameter(string $name, mixed $value): void {
 		$this[$name] = $value;
 	}
 
-	/**
-	 * The given closure is call the first time the given service is queried.
-	 * The closure has to return the instance for the given service.
-	 * Created instance will be cached in case $shared is true.
-	 *
-	 * @param string $name name of the service to register another backend for
-	 * @param Closure $closure the closure to be called on service creation
-	 * @param bool $shared
-	 */
-	public function registerService($name, Closure $closure, $shared = true) {
+	public function registerService(string $name, Closure $closure, bool $shared = true): void {
 		$wrapped = function () use ($closure) {
 			return $closure($this);
 		};
 		$name = $this->sanitizeName($name);
-		if (isset($this[$name])) {
-			unset($this[$name]);
+		if (isset($this->container[$name])) {
+			unset($this->container[$name]);
 		}
 		if ($shared) {
-			$this[$name] = $wrapped;
+			$this->container[$name] = $wrapped;
 		} else {
-			$this[$name] = $this->container->factory($wrapped);
+			$this->container[$name] = $this->container->factory($wrapped);
 		}
 	}
 
@@ -170,13 +187,28 @@ class SimpleContainer implements ArrayAccess, ContainerInterface, IContainer {
 	 * @param string $alias the alias that should be registered
 	 * @param string $target the target that should be resolved instead
 	 */
-	public function registerAlias($alias, $target) {
-		$this->registerService($alias, function (ContainerInterface $container) use ($target) {
+	public function registerAlias(string $alias, string $target): void {
+		$this->registerService($alias, function (ContainerInterface $container) use ($target): mixed {
 			return $container->get($target);
 		}, false);
 	}
 
-	/*
+	protected function registerDeprecatedAlias(string $alias, string $target): void {
+		$this->registerService($alias, function (ContainerInterface $container) use ($target, $alias): mixed {
+			try {
+				$logger = $container->get(LoggerInterface::class);
+				$logger->debug('The requested alias "' . $alias . '" is deprecated. Please request "' . $target . '" directly. This alias will be removed in a future Nextcloud version.', [
+					'app' => $this->appName ?? 'serverDI',
+				]);
+			} catch (ContainerExceptionInterface $e) {
+				// Could not get logger. Continue
+			}
+
+			return $container->get($target);
+		}, false);
+	}
+
+	/**
 	 * @param string $name
 	 * @return string
 	 */

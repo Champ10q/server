@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -8,15 +9,17 @@ namespace OCA\Files_Sharing\Tests;
 
 use OC\Files\FileInfo;
 use OC\Files\Filesystem;
-use OCA\Files_Sharing\Helper;
 use OCP\Constants;
+use OCP\IConfig;
+use OCP\IGroupManager;
+use OCP\IUserManager;
+use OCP\Server;
 use OCP\Share\IShare;
 
 /**
  * Class ShareTest
- *
- * @group DB
  */
+#[\PHPUnit\Framework\Attributes\Group(name: 'DB')]
 class ShareTest extends TestCase {
 	public const TEST_FOLDER_NAME = '/folder_share_api_test';
 
@@ -53,8 +56,8 @@ class ShareTest extends TestCase {
 	}
 
 	public function testUnshareFromSelf(): void {
-		$groupManager = \OC::$server->getGroupManager();
-		$userManager = \OC::$server->getUserManager();
+		$groupManager = Server::get(IGroupManager::class);
+		$userManager = Server::get(IUserManager::class);
 
 		$testGroup = $groupManager->createGroup('testGroup');
 		$user1 = $userManager->get(self::TEST_FILES_SHARING_API_USER2);
@@ -124,7 +127,7 @@ class ShareTest extends TestCase {
 			Constants::PERMISSION_READ | Constants::PERMISSION_UPDATE | Constants::PERMISSION_SHARE
 		);
 
-		Helper::setShareFolder('/Shared/subfolder');
+		Server::get(IConfig::class)->setSystemValue('share_folder', '/Shared/subfolder');
 
 		$share = $this->share(
 			IShare::TYPE_USER,
@@ -140,7 +143,7 @@ class ShareTest extends TestCase {
 		$this->assertTrue(Filesystem::file_exists('/Shared/subfolder/' . $this->folder));
 
 		//cleanup
-		\OC::$server->getConfig()->deleteSystemValue('share_folder');
+		Server::get(IConfig::class)->deleteSystemValue('share_folder');
 	}
 
 	public function testShareWithGroupUniqueName(): void {
@@ -184,8 +187,8 @@ class ShareTest extends TestCase {
 
 	/**
 	 * shared files should never have delete permissions
-	 * @dataProvider dataProviderTestFileSharePermissions
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataProviderTestFileSharePermissions')]
 	public function testFileSharePermissions($permission, $expectedvalid): void {
 		$pass = true;
 		try {
@@ -203,7 +206,7 @@ class ShareTest extends TestCase {
 		$this->assertEquals($expectedvalid, $pass);
 	}
 
-	public function dataProviderTestFileSharePermissions() {
+	public static function dataProviderTestFileSharePermissions() {
 		$permission1 = Constants::PERMISSION_ALL;
 		$permission3 = Constants::PERMISSION_READ;
 		$permission4 = Constants::PERMISSION_READ | Constants::PERMISSION_UPDATE;

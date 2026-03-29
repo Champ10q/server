@@ -21,29 +21,15 @@ use function OCP\Log\logger;
  * @template-implements \ArrayAccess<string,mixed>
  */
 class CryptoSessionData implements \ArrayAccess, ISession {
-	/** @var ISession */
-	protected $session;
-	/** @var \OCP\Security\ICrypto */
-	protected $crypto;
-	/** @var string */
-	protected $passphrase;
-	/** @var array */
-	protected $sessionValues;
-	/** @var bool */
-	protected $isModified = false;
+	protected array $sessionValues = [];
+	protected bool $isModified = false;
 	public const encryptedSessionName = 'encrypted_session_data';
 
-	/**
-	 * @param ISession $session
-	 * @param ICrypto $crypto
-	 * @param string $passphrase
-	 */
-	public function __construct(ISession $session,
-		ICrypto $crypto,
-		string $passphrase) {
-		$this->crypto = $crypto;
-		$this->session = $session;
-		$this->passphrase = $passphrase;
+	public function __construct(
+		protected ISession $session,
+		protected ICrypto $crypto,
+		protected string $passphrase,
+	) {
 		$this->initializeSession();
 	}
 
@@ -72,6 +58,15 @@ class CryptoSessionData implements \ArrayAccess, ISession {
 					512,
 					JSON_THROW_ON_ERROR,
 				);
+			} catch (\RuntimeException $e) {
+				// Even though this might be critical in general, we are automatically trying again and will likely succeed.
+				// We only log to info to not spam the logs with a well-known problem the admin cannot do anything about.
+				// See https://github.com/nextcloud/server/issues/42157
+				logger('core')->info('Could not decrypt or decode encrypted session data', [
+					'exception' => $e,
+				]);
+				$this->sessionValues = [];
+				$this->regenerateId(true, false);
 			} catch (\Exception $e) {
 				logger('core')->critical('Could not decrypt or decode encrypted session data', [
 					'exception' => $e,

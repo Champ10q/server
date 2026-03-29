@@ -8,6 +8,7 @@ declare(strict_types=1);
  */
 namespace OCA\FederatedFileSharing\Settings;
 
+use OCA\FederatedFileSharing\AppInfo\Application;
 use OCA\FederatedFileSharing\FederatedShareProvider;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\AppFramework\Services\IInitialState;
@@ -15,6 +16,7 @@ use OCP\Defaults;
 use OCP\IURLGenerator;
 use OCP\IUserSession;
 use OCP\Settings\ISettings;
+use OCP\Util;
 
 class Personal implements ISettings {
 	public function __construct(
@@ -41,7 +43,9 @@ class Personal implements ISettings {
 		$this->initialState->provideInitialState('cloudId', $cloudID);
 		$this->initialState->provideInitialState('docUrlFederated', $this->urlGenerator->linkToDocs('user-sharing-federated'));
 
-		return new TemplateResponse('federatedfilesharing', 'settings-personal', [], TemplateResponse::RENDER_AS_BLANK);
+		Util::addStyle(Application::APP_ID, 'settings-personal');
+		Util::addScript(Application::APP_ID, 'settings-personal');
+		return new TemplateResponse(Application::APP_ID, 'settings-personal', renderAs: TemplateResponse::RENDER_AS_BLANK);
 	}
 
 	/**
@@ -49,8 +53,8 @@ class Personal implements ISettings {
 	 * @since 9.1
 	 */
 	public function getSection(): ?string {
-		if ($this->federatedShareProvider->isIncomingServer2serverShareEnabled() ||
-			$this->federatedShareProvider->isIncomingServer2serverGroupShareEnabled()) {
+		if ($this->federatedShareProvider->isIncomingServer2serverShareEnabled()
+			|| $this->federatedShareProvider->isIncomingServer2serverGroupShareEnabled()) {
 			return 'sharing';
 		}
 		return null;

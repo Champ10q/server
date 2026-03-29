@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -13,16 +14,9 @@ use OCP\Files\SimpleFS\ISimpleFile;
 use OCP\Files\SimpleFS\ISimpleFolder;
 
 class SimpleFolder implements ISimpleFolder {
-	/** @var Folder */
-	private $folder;
-
-	/**
-	 * Folder constructor.
-	 *
-	 * @param Folder $folder
-	 */
-	public function __construct(Folder $folder) {
-		$this->folder = $folder;
+	public function __construct(
+		private Folder $folder,
+	) {
 	}
 
 	public function getName(): string {

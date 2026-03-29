@@ -8,13 +8,21 @@
 namespace OCP;
 
 use InvalidArgumentException;
+use OCP\Accounts\IAccountManager;
+use OCP\AppFramework\Attribute\Consumable;
 
 /**
  * Interface IUser
  *
  * @since 8.0.0
  */
+#[Consumable(since: '8.0.0')]
 interface IUser {
+	/**
+	 * @since 32.0.0
+	 */
+	public const MAX_USERID_LENGTH = 64;
+
 	/**
 	 * get the user id
 	 *
@@ -50,13 +58,22 @@ interface IUser {
 	 * @return int
 	 * @since 8.0.0
 	 */
-	public function getLastLogin();
+	public function getLastLogin(): int;
 
 	/**
-	 * updates the timestamp of the most recent login of this user
+	 * Returns the timestamp of the user's first login, 0 if the user did never login, or -1 if the data is unknown (first login was on an older version)
+	 *
+	 * @since 31.0.0
+	 */
+	public function getFirstLogin(): int;
+
+	/**
+	 * Updates the timestamp of the most recent login of this user (and first login if needed)
+	 *
+	 * @return bool whether this is the first login
 	 * @since 8.0.0
 	 */
-	public function updateLastLoginTimestamp();
+	public function updateLastLoginTimestamp(): bool;
 
 	/**
 	 * Delete the user
@@ -119,26 +136,36 @@ interface IUser {
 	/**
 	 * check if the backend allows the user to change their avatar on Personal page
 	 *
-	 * @return bool
 	 * @since 8.0.0
 	 */
-	public function canChangeAvatar();
+	public function canChangeAvatar(): bool;
 
 	/**
 	 * check if the backend supports changing passwords
 	 *
-	 * @return bool
 	 * @since 8.0.0
 	 */
-	public function canChangePassword();
+	public function canChangePassword(): bool;
 
 	/**
 	 * check if the backend supports changing display names
 	 *
-	 * @return bool
 	 * @since 8.0.0
 	 */
-	public function canChangeDisplayName();
+	public function canChangeDisplayName(): bool;
+
+	/**
+	 * Check if the backend supports changing email
+	 *
+	 * @since 32.0.0
+	 */
+	public function canChangeEmail(): bool;
+
+	/**
+	 * @param IAccountManager::PROPERTY_*|IAccountManager::COLLECTION_* $property
+	 * @since 34.0.0
+	 */
+	public function canEditProperty(string $property): bool;
 
 	/**
 	 * check if the user is enabled
@@ -258,6 +285,15 @@ interface IUser {
 	 * @since 9.0.0
 	 */
 	public function getQuota();
+
+	/**
+	 * Get the users' quota in machine readable form. If a specific quota is set
+	 * for the user, then the quota is returned in bytes. Otherwise the default value is returned.
+	 * If a default setting was not set, it is return as `\OCP\Files\FileInfo::SPACE_UNLIMITED`, i.e. quota is not limited.
+	 *
+	 * @since 32.0.0
+	 */
+	public function getQuotaBytes(): int|float;
 
 	/**
 	 * set the users' quota

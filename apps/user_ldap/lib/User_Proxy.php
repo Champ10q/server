@@ -13,18 +13,17 @@ use OCA\User_LDAP\User\User;
 use OCP\IUserBackend;
 use OCP\Notification\IManager as INotificationManager;
 use OCP\User\Backend\ICountMappedUsersBackend;
-use OCP\User\Backend\ICountUsersBackend;
+use OCP\User\Backend\IGetDisplayNameBackend;
+use OCP\User\Backend\ILimitAwareCountUsersBackend;
+use OCP\User\Backend\IPropertyPermissionBackend;
 use OCP\User\Backend\IProvideEnabledStateBackend;
 use OCP\UserInterface;
 use Psr\Log\LoggerInterface;
 
-class User_Proxy extends Proxy implements IUserBackend, UserInterface, IUserLDAP, ICountUsersBackend, ICountMappedUsersBackend, IProvideEnabledStateBackend {
-	/** @var User_LDAP[] */
-	private array $backends = [];
-	private ?User_LDAP $refBackend = null;
-
-	private bool $isSetUp = false;
-
+/**
+ * @template-extends Proxy<User_LDAP>
+ */
+class User_Proxy extends Proxy implements IUserBackend, UserInterface, IUserLDAP, ILimitAwareCountUsersBackend, ICountMappedUsersBackend, IProvideEnabledStateBackend, IGetDisplayNameBackend, IPropertyPermissionBackend {
 	public function __construct(
 		private Helper $helper,
 		ILDAPWrapper $ldap,
@@ -34,30 +33,17 @@ class User_Proxy extends Proxy implements IUserBackend, UserInterface, IUserLDAP
 		private LoggerInterface $logger,
 		private DeletedUsersIndex $deletedUsersIndex,
 	) {
-		parent::__construct($ldap, $accessFactory);
+		parent::__construct($helper, $ldap, $accessFactory);
 	}
 
-	protected function setup(): void {
-		if ($this->isSetUp) {
-			return;
-		}
-
-		$serverConfigPrefixes = $this->helper->getServerConfigurationPrefixes(true);
-		foreach ($serverConfigPrefixes as $configPrefix) {
-			$this->backends[$configPrefix] = new User_LDAP(
-				$this->getAccess($configPrefix),
-				$this->notificationManager,
-				$this->userPluginManager,
-				$this->logger,
-				$this->deletedUsersIndex,
-			);
-
-			if (is_null($this->refBackend)) {
-				$this->refBackend = $this->backends[$configPrefix];
-			}
-		}
-
-		$this->isSetUp = true;
+	protected function newInstance(string $configPrefix): User_LDAP {
+		return new User_LDAP(
+			$this->getAccess($configPrefix),
+			$this->notificationManager,
+			$this->userPluginManager,
+			$this->logger,
+			$this->deletedUsersIndex,
+		);
 	}
 
 	/**
@@ -269,7 +255,7 @@ class User_Proxy extends Proxy implements IUserBackend, UserInterface, IUserLDAP
 	 * @param string $uid user ID of the user
 	 * @return string display name
 	 */
-	public function getDisplayName($uid) {
+	public function getDisplayName($uid): string {
 		return $this->handleRequest($uid, 'getDisplayName', [$uid]);
 	}
 
@@ -350,17 +336,21 @@ class User_Proxy extends Proxy implements IUserBackend, UserInterface, IUserLDAP
 
 	/**
 	 * Count the number of users
-	 *
-	 * @return int|false
 	 */
-	public function countUsers() {
+	public function countUsers(int $limit = 0): int|false {
 		$this->setup();
 
 		$users = false;
 		foreach ($this->backends as $backend) {
-			$backendUsers = $backend->countUsers();
+			$backendUsers = $backend->countUsers($limit);
 			if ($backendUsers !== false) {
 				$users = (int)$users + $backendUsers;
+				if ($limit > 0) {
+					if ($users >= $limit) {
+						break;
+					}
+					$limit -= $users;
+				}
 			}
 		}
 		return $users;
@@ -427,11 +417,11 @@ class User_Proxy extends Proxy implements IUserBackend, UserInterface, IUserLDAP
 		if ($search !== '') {
 			$disabledUsers = array_filter(
 				$disabledUsers,
-				fn (OfflineUser $user): bool =>
-					mb_stripos($user->getOCName(), $search) !== false ||
-					mb_stripos($user->getUID(), $search) !== false ||
-					mb_stripos($user->getDisplayName(), $search) !== false ||
-					mb_stripos($user->getEmail(), $search) !== false,
+				fn (OfflineUser $user): bool
+					=> mb_stripos($user->getOCName(), $search) !== false
+					|| mb_stripos($user->getUID(), $search) !== false
+					|| mb_stripos($user->getDisplayName(), $search) !== false
+					|| mb_stripos($user->getEmail(), $search) !== false,
 			);
 		}
 		return array_map(
@@ -442,5 +432,9 @@ class User_Proxy extends Proxy implements IUserBackend, UserInterface, IUserLDAP
 				$limit
 			)
 		);
+	}
+
+	public function canEditProperty(string $uid, string $property): bool {
+		return $this->handleRequest($uid, 'canEditProperty', [$uid, $property]);
 	}
 }

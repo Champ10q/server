@@ -36,7 +36,7 @@ export interface IAppstoreApp {
 	author: string[] | Record<string, string>
 	level: number
 	version: string
-	category: string|string[]
+	category: string | string[]
 
 	preview?: string
 	screenshot?: string
@@ -57,24 +57,25 @@ export interface IAppstoreApp {
 }
 
 export interface IComputeDevice {
-	id: string,
-	label: string,
+	id: string
+	label: string
 }
 
 export interface IDeployConfig {
-	computeDevice: IComputeDevice,
-	net: string,
-	nextcloud_url: string,
+	computeDevice: IComputeDevice
+	net: string
+	nextcloud_url: string
 }
 
 export interface IDeployDaemon {
-	accepts_deploy_id: string,
-	deploy_config: IDeployConfig,
-	display_name: string,
-	host: string,
-	id: number,
-	name: string,
-	protocol: string,
+	accepts_deploy_id: string
+	deploy_config: IDeployConfig
+	display_name: string
+	host: string
+	id: number
+	name: string
+	protocol: string
+	exAppsCount: number
 }
 
 export interface IExAppStatus {
@@ -87,8 +88,31 @@ export interface IExAppStatus {
 	type: string
 }
 
+export interface IDeployEnv {
+	envName: string
+	displayName: string
+	description: string
+	default?: string
+}
+
+export interface IDeployMount {
+	hostPath: string
+	containerPath: string
+	readOnly: boolean
+}
+
+export interface IDeployOptions {
+	environment_variables: IDeployEnv[]
+	mounts: IDeployMount[]
+}
+
+export interface IAppstoreExAppRelease extends IAppstoreAppRelease {
+	environmentVariables?: IDeployEnv[]
+}
+
 export interface IAppstoreExApp extends IAppstoreApp {
 	daemon: IDeployDaemon | null | undefined
 	status: IExAppStatus | Record<string, never>
 	error: string
+	releases: IAppstoreExAppRelease[]
 }

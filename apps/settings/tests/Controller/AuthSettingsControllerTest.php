@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2019-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -18,6 +19,9 @@ use OCA\Settings\Controller\AuthSettingsController;
 use OCP\Activity\IEvent;
 use OCP\Activity\IManager;
 use OCP\AppFramework\Http\JSONResponse;
+use OCP\AppFramework\Services\IAppConfig;
+use OCP\IConfig;
+use OCP\IL10N;
 use OCP\IRequest;
 use OCP\ISession;
 use OCP\IUserSession;
@@ -28,24 +32,18 @@ use Psr\Log\LoggerInterface;
 use Test\TestCase;
 
 class AuthSettingsControllerTest extends TestCase {
-
-	/** @var AuthSettingsController */
-	private $controller;
-	/** @var IRequest|MockObject */
-	private $request;
-	/** @var IProvider|MockObject */
-	private $tokenProvider;
-	/** @var ISession|MockObject */
-	private $session;
-	/** @var IUserSession|MockObject */
-	private $userSession;
-	/** @var ISecureRandom|MockObject */
-	private $secureRandom;
-	/** @var IManager|MockObject */
-	private $activityManager;
-	/** @var RemoteWipe|MockObject */
-	private $remoteWipe;
-	private $uid = 'jane';
+	private IRequest&MockObject $request;
+	private IProvider&MockObject $tokenProvider;
+	private ISession&MockObject $session;
+	private IUserSession&MockObject $userSession;
+	private ISecureRandom&MockObject $secureRandom;
+	private IManager&MockObject $activityManager;
+	private IAppConfig&MockObject $appConfig;
+	private RemoteWipe&MockObject $remoteWipe;
+	private IConfig&MockObject $serverConfig;
+	private IL10N&MockObject $l;
+	private string $uid = 'jane';
+	private AuthSettingsController $controller;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -56,9 +54,12 @@ class AuthSettingsControllerTest extends TestCase {
 		$this->userSession = $this->createMock(IUserSession::class);
 		$this->secureRandom = $this->createMock(ISecureRandom::class);
 		$this->activityManager = $this->createMock(IManager::class);
+		$this->appConfig = $this->createMock(IAppConfig::class);
 		$this->remoteWipe = $this->createMock(RemoteWipe::class);
-		/** @var LoggerInterface|MockObject $logger */
+		$this->serverConfig = $this->createMock(IConfig::class);
+		/** @var LoggerInterface&MockObject $logger */
 		$logger = $this->createMock(LoggerInterface::class);
+		$this->l = $this->createMock(IL10N::class);
 
 		$this->controller = new AuthSettingsController(
 			'core',
@@ -69,8 +70,11 @@ class AuthSettingsControllerTest extends TestCase {
 			$this->uid,
 			$this->userSession,
 			$this->activityManager,
+			$this->appConfig,
 			$this->remoteWipe,
-			$logger
+			$logger,
+			$this->serverConfig,
+			$this->l,
 		);
 	}
 
@@ -80,6 +84,9 @@ class AuthSettingsControllerTest extends TestCase {
 		$deviceToken = $this->createMock(IToken::class);
 		$password = '123456';
 
+		$this->serverConfig->method('getSystemValueBool')
+			->with('auth_can_create_app_token', true)
+			->willReturn(true);
 		$this->session->expects($this->once())
 			->method('getId')
 			->willReturn('sessionid');
@@ -123,12 +130,36 @@ class AuthSettingsControllerTest extends TestCase {
 		$this->assertEquals($expected, $response->getData());
 	}
 
+	public function testCreateDisabledBySystemConfig(): void {
+		$name = 'Nexus 4';
+
+		$this->serverConfig->method('getSystemValueBool')
+			->with('auth_can_create_app_token', true)
+			->willReturn(false);
+		$this->session->expects($this->once())
+			->method('getId')
+			->willReturn('sessionid');
+		$this->tokenProvider->expects($this->never())
+			->method('getToken');
+		$this->tokenProvider->expects($this->never())
+			->method('getPassword');
+
+
+		$this->tokenProvider->expects($this->never())
+			->method('generateToken');
+
+		$expected = new JSONResponse();
+		$expected->setStatus(Http::STATUS_SERVICE_UNAVAILABLE);
+
+		$this->assertEquals($expected, $this->controller->create($name));
+	}
+
 	public function testCreateSessionNotAvailable(): void {
 		$name = 'personal phone';
 
 		$this->session->expects($this->once())
 			->method('getId')
-			->will($this->throwException(new SessionNotAvailableException()));
+			->willThrowException(new SessionNotAvailableException());
 
 		$expected = new JSONResponse();
 		$expected->setStatus(Http::STATUS_SERVICE_UNAVAILABLE);
@@ -139,13 +170,16 @@ class AuthSettingsControllerTest extends TestCase {
 	public function testCreateInvalidToken(): void {
 		$name = 'Company IPhone';
 
+		$this->serverConfig->method('getSystemValueBool')
+			->with('auth_can_create_app_token', true)
+			->willReturn(true);
 		$this->session->expects($this->once())
 			->method('getId')
 			->willReturn('sessionid');
 		$this->tokenProvider->expects($this->once())
 			->method('getToken')
 			->with('sessionid')
-			->will($this->throwException(new InvalidTokenException()));
+			->willThrowException(new InvalidTokenException());
 
 		$expected = new JSONResponse();
 		$expected->setStatus(Http::STATUS_SERVICE_UNAVAILABLE);
@@ -214,19 +248,14 @@ class AuthSettingsControllerTest extends TestCase {
 		$this->assertSame(\OCP\AppFramework\Http::STATUS_NOT_FOUND, $response->getStatus());
 	}
 
-	public function dataRenameToken(): array {
+	public static function dataRenameToken(): array {
 		return [
 			'App password => Other token name' => ['App password', 'Other token name'],
 			'Other token name => App password' => ['Other token name', 'App password'],
 		];
 	}
 
-	/**
-	 * @dataProvider dataRenameToken
-	 *
-	 * @param string $name
-	 * @param string $newName
-	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataRenameToken')]
 	public function testUpdateRename(string $name, string $newName): void {
 		$tokenId = 42;
 		$token = $this->createMock(PublicKeyToken::class);
@@ -257,19 +286,14 @@ class AuthSettingsControllerTest extends TestCase {
 		$this->assertSame([], $this->controller->update($tokenId, [IToken::SCOPE_FILESYSTEM => true], $newName));
 	}
 
-	public function dataUpdateFilesystemScope(): array {
+	public static function dataUpdateFilesystemScope(): array {
 		return [
 			'Grant filesystem access' => [false, true],
 			'Revoke filesystem access' => [true, false],
 		];
 	}
 
-	/**
-	 * @dataProvider dataUpdateFilesystemScope
-	 *
-	 * @param bool $filesystem
-	 * @param bool $newFilesystem
-	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataUpdateFilesystemScope')]
 	public function testUpdateFilesystemScope(bool $filesystem, bool $newFilesystem): void {
 		$tokenId = 42;
 		$token = $this->createMock(PublicKeyToken::class);

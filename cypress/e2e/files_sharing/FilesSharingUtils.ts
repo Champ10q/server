@@ -2,25 +2,28 @@
  * SPDX-FileCopyrightText: 2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-/* eslint-disable jsdoc/require-jsdoc */
-import { triggerActionForFile } from '../files/FilesUtils'
+
+import { closeSidebar, triggerActionForFile } from '../files/FilesUtils.ts'
 
 export interface ShareSetting {
 	read: boolean
 	update: boolean
 	delete: boolean
+	create: boolean
 	share: boolean
 	download: boolean
 	note: string
+	expiryDate: Date
 }
 
 export function createShare(fileName: string, username: string, shareSettings: Partial<ShareSetting> = {}) {
 	openSharingPanel(fileName)
+	cy.intercept('POST', '**/ocs/v2.php/apps/files_sharing/api/v1/shares').as('createShare')
 
 	cy.get('#app-sidebar-vue').within(() => {
-		cy.get('#sharing-search-input').clear()
 		cy.intercept({ times: 1, method: 'GET', url: '**/apps/files_sharing/api/v1/sharees?*' }).as('userSearch')
-		cy.get('#sharing-search-input').type(username)
+		cy.findByRole('combobox', { name: /Search for internal recipients/i })
+			.type(`{selectAll}${username}`)
 		cy.wait('@userSearch')
 	})
 
@@ -28,26 +31,44 @@ export function createShare(fileName: string, username: string, shareSettings: P
 
 	// HACK: Save the share and then update it, as permissions changes are currently not saved for new share.
 	cy.get('[data-cy-files-sharing-share-editor-action="save"]').click({ scrollBehavior: 'nearest' })
+	cy.wait('@createShare')
+	closeSidebar()
+
 	updateShare(fileName, 0, shareSettings)
+}
+
+export function openSharingDetails(index: number) {
+	cy.get('#app-sidebar-vue').within(() => {
+		cy.findAllByRole('button', { name: /open sharing details/i })
+			.should('have.length.at.least', index + 1)
+			.eq(index)
+			.click({ force: true })
+		cy.get('[data-cy-files-sharing-share-permissions-bundle="custom"]')
+			.click()
+	})
 }
 
 export function updateShare(fileName: string, index: number, shareSettings: Partial<ShareSetting> = {}) {
 	openSharingPanel(fileName)
+	openSharingDetails(index)
 
 	cy.intercept({ times: 1, method: 'PUT', url: '**/apps/files_sharing/api/v1/shares/*' }).as('updateShare')
 
 	cy.get('#app-sidebar-vue').within(() => {
-		cy.get('[data-cy-files-sharing-share-actions]').eq(index).click()
-		cy.get('[data-cy-files-sharing-share-permissions-bundle="custom"]').click()
-
 		if (shareSettings.download !== undefined) {
 			cy.get('[data-cy-files-sharing-share-permissions-checkbox="download"]').find('input').as('downloadCheckbox')
 			if (shareSettings.download) {
 				// Force:true because the checkbox is hidden by the pretty UI.
-				cy.get('@downloadCheckbox').check({ force: true, scrollBehavior: 'nearest' })
+				cy.get('@downloadCheckbox')
+					.check({ force: true, scrollBehavior: 'nearest' })
+				cy.get('@downloadCheckbox')
+					.should('be.checked')
 			} else {
 				// Force:true because the checkbox is hidden by the pretty UI.
-				cy.get('@downloadCheckbox').uncheck({ force: true, scrollBehavior: 'nearest' })
+				cy.get('@downloadCheckbox')
+					.uncheck({ force: true, scrollBehavior: 'nearest' })
+				cy.get('@downloadCheckbox')
+					.should('not.be.checked')
 			}
 		}
 
@@ -73,6 +94,17 @@ export function updateShare(fileName: string, index: number, shareSettings: Part
 			}
 		}
 
+		if (shareSettings.create !== undefined) {
+			cy.get('[data-cy-files-sharing-share-permissions-checkbox="create"]').find('input').as('createCheckbox')
+			if (shareSettings.create) {
+				// Force:true because the checkbox is hidden by the pretty UI.
+				cy.get('@createCheckbox').check({ force: true, scrollBehavior: 'nearest' })
+			} else {
+				// Force:true because the checkbox is hidden by the pretty UI.
+				cy.get('@createCheckbox').uncheck({ force: true, scrollBehavior: 'nearest' })
+			}
+		}
+
 		if (shareSettings.delete !== undefined) {
 			cy.get('[data-cy-files-sharing-share-permissions-checkbox="delete"]').find('input').as('deleteCheckbox')
 			if (shareSettings.delete) {
@@ -89,17 +121,28 @@ export function updateShare(fileName: string, index: number, shareSettings: Part
 			cy.findByRole('textbox', { name: /note to recipient/i }).type(shareSettings.note)
 		}
 
+		if (shareSettings.expiryDate !== undefined) {
+			cy.findByRole('checkbox', { name: /expiration date/i })
+				.check({ force: true, scrollBehavior: 'nearest' })
+			cy.get('#share-date-picker')
+				.type(`${shareSettings.expiryDate.getFullYear()}-${String(shareSettings.expiryDate.getMonth() + 1).padStart(2, '0')}-${String(shareSettings.expiryDate.getDate()).padStart(2, '0')}`)
+		}
+
 		cy.get('[data-cy-files-sharing-share-editor-action="save"]').click({ scrollBehavior: 'nearest' })
 
 		cy.wait('@updateShare')
 	})
+	closeSidebar()
 }
 
 export function openSharingPanel(fileName: string) {
 	triggerActionForFile(fileName, 'details')
 
-	cy.get('#app-sidebar-vue')
-		.get('[aria-controls="tab-sharing"]')
+	cy.get('[data-cy-sidebar]')
+		.as('sidebar')
+		.should('be.visible')
+	cy.get('@sidebar')
+		.find('[aria-controls="tab-sharing"]')
 		.click()
 }
 
@@ -113,10 +156,11 @@ type FileRequestOptions = {
 
 /**
  * Create a file request for a folder
+ *
  * @param path The path of the folder, leading slash is required
  * @param options The options for the file request
  */
-export const createFileRequest = (path: string, options: FileRequestOptions = {}) => {
+export function createFileRequest(path: string, options: FileRequestOptions = {}) {
 	if (!path.startsWith('/')) {
 		throw new Error('Path must start with a slash')
 	}

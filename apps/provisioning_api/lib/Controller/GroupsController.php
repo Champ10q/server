@@ -21,6 +21,7 @@ use OCP\AppFramework\OCS\OCSException;
 use OCP\AppFramework\OCS\OCSForbiddenException;
 use OCP\AppFramework\OCS\OCSNotFoundException;
 use OCP\AppFramework\OCSController;
+use OCP\Files\IRootFolder;
 use OCP\Group\ISubAdmin;
 use OCP\IConfig;
 use OCP\IGroup;
@@ -36,7 +37,7 @@ use Psr\Log\LoggerInterface;
  * @psalm-import-type Provisioning_APIGroupDetails from ResponseDefinitions
  * @psalm-import-type Provisioning_APIUserDetails from ResponseDefinitions
  */
-class GroupsController extends AUserData {
+class GroupsController extends AUserDataOCSController {
 
 	public function __construct(
 		string $appName,
@@ -48,6 +49,7 @@ class GroupsController extends AUserData {
 		IAccountManager $accountManager,
 		ISubAdmin $subAdminManager,
 		IFactory $l10nFactory,
+		IRootFolder $rootFolder,
 		private LoggerInterface $logger,
 	) {
 		parent::__construct($appName,
@@ -58,7 +60,8 @@ class GroupsController extends AUserData {
 			$userSession,
 			$accountManager,
 			$subAdminManager,
-			$l10nFactory
+			$l10nFactory,
+			$rootFolder,
 		);
 	}
 
@@ -75,10 +78,10 @@ class GroupsController extends AUserData {
 	#[NoAdminRequired]
 	public function getGroups(string $search = '', ?int $limit = null, int $offset = 0): DataResponse {
 		$groups = $this->groupManager->search($search, $limit, $offset);
-		$groups = array_values(array_map(function ($group) {
+		$groups = array_map(function ($group) {
 			/** @var IGroup $group */
 			return $group->getGID();
-		}, $groups));
+		}, $groups);
 
 		return new DataResponse(['groups' => $groups]);
 	}
@@ -95,9 +98,10 @@ class GroupsController extends AUserData {
 	 */
 	#[NoAdminRequired]
 	#[AuthorizedAdminSetting(settings: Sharing::class)]
+	#[AuthorizedAdminSetting(settings: Users::class)]
 	public function getGroupsDetails(string $search = '', ?int $limit = null, int $offset = 0): DataResponse {
 		$groups = $this->groupManager->search($search, $limit, $offset);
-		$groups = array_values(array_map(function ($group) {
+		$groups = array_map(function ($group) {
 			/** @var IGroup $group */
 			return [
 				'id' => $group->getGID(),
@@ -107,7 +111,7 @@ class GroupsController extends AUserData {
 				'canAdd' => $group->canAddUser(),
 				'canRemove' => $group->canRemoveUser(),
 			];
-		}, $groups));
+		}, $groups);
 
 		return new DataResponse(['groups' => $groups]);
 	}
@@ -129,6 +133,8 @@ class GroupsController extends AUserData {
 	}
 
 	/**
+	 * @NoSubAdminRequired
+	 *
 	 * Get a list of users in the specified group
 	 *
 	 * @param string $groupId ID of the group
@@ -150,6 +156,7 @@ class GroupsController extends AUserData {
 		$group = $this->groupManager->get($groupId);
 		if ($group !== null) {
 			$isSubadminOfGroup = $this->groupManager->getSubAdmin()->isSubAdminOfGroup($user, $group);
+			$isMember = $this->groupManager->isInGroup($user->getUID(), $group->getGID());
 		} else {
 			throw new OCSNotFoundException('The requested group could not be found');
 		}
@@ -157,7 +164,7 @@ class GroupsController extends AUserData {
 		// Check subadmin has access to this group
 		$isAdmin = $this->groupManager->isAdmin($user->getUID());
 		$isDelegatedAdmin = $this->groupManager->isDelegatedAdmin($user->getUID());
-		if ($isAdmin || $isDelegatedAdmin || $isSubadminOfGroup) {
+		if ($isAdmin || $isDelegatedAdmin || $isSubadminOfGroup || $isMember) {
 			$users = $this->groupManager->get($groupId)->getUsers();
 			$users = array_map(function ($user) {
 				/** @var IUser $user */

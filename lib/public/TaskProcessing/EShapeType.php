@@ -82,6 +82,9 @@ enum EShapeType: int {
 	 */
 	public function validateInput(mixed $value): void {
 		$this->validateNonFileType($value);
+		if ($this === EShapeType::Text && is_string($value) && strlen($value) > 512_000) {
+			throw new ValidationException('Text is too long');
+		}
 		if ($this === EShapeType::Image && !is_numeric($value)) {
 			throw new ValidationException('Non-image item provided for Image slot');
 		}
@@ -154,19 +157,19 @@ enum EShapeType: int {
 		if ($this === EShapeType::ListOfImages && (!is_array($value) || count(array_filter($value, fn ($item) => !is_numeric($item))) > 0)) {
 			throw new ValidationException('Non-image list item provided for ListOfImages slot');
 		}
-		if ($this === EShapeType::Audio && !is_string($value)) {
+		if ($this === EShapeType::Audio && !is_numeric($value)) {
 			throw new ValidationException('Non-audio item provided for Audio slot');
 		}
 		if ($this === EShapeType::ListOfAudios && (!is_array($value) || count(array_filter($value, fn ($item) => !is_numeric($item))) > 0)) {
 			throw new ValidationException('Non-audio list item provided for ListOfAudio slot');
 		}
-		if ($this === EShapeType::Video && !is_string($value)) {
+		if ($this === EShapeType::Video && !is_numeric($value)) {
 			throw new ValidationException('Non-video item provided for Video slot');
 		}
 		if ($this === EShapeType::ListOfVideos && (!is_array($value) || count(array_filter($value, fn ($item) => !is_numeric($item))) > 0)) {
 			throw new ValidationException('Non-video list item provided for ListOfTexts slot');
 		}
-		if ($this === EShapeType::File && !is_string($value)) {
+		if ($this === EShapeType::File && !is_numeric($value)) {
 			throw new ValidationException('Non-file item provided for File slot');
 		}
 		if ($this === EShapeType::ListOfFiles && (!is_array($value) || count(array_filter($value, fn ($item) => !is_numeric($item))) > 0)) {

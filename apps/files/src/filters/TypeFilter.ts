@@ -2,23 +2,16 @@
  * SPDX-FileCopyrightText: 2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import type { IFileListFilterChip, INode } from '@nextcloud/files'
 
-import { subscribe } from '@nextcloud/event-bus'
+import type { IFileListFilterChip, IFileListFilterWithUi, INode } from '@nextcloud/files'
+
+import svgFileOutline from '@mdi/svg/svg/file-outline.svg?raw'
 import { FileListFilter, registerFileListFilter } from '@nextcloud/files'
 import { t } from '@nextcloud/l10n'
+import wrap from '@vue/web-component-wrapper'
 import Vue from 'vue'
 import FileListFilterType from '../components/FileListFilter/FileListFilterType.vue'
-
-// TODO: Create a modern replacement for OC.MimeType...
-import svgDocument from '@mdi/svg/svg/file-document.svg?raw'
-import svgSpreadsheet from '@mdi/svg/svg/file-table-box.svg?raw'
-import svgPresentation from '@mdi/svg/svg/file-presentation-box.svg?raw'
-import svgPDF from '@mdi/svg/svg/file-pdf-box.svg?raw'
-import svgFolder from '@mdi/svg/svg/folder.svg?raw'
-import svgAudio from '@mdi/svg/svg/music.svg?raw'
-import svgImage from '@mdi/svg/svg/image.svg?raw'
-import svgMovie from '@mdi/svg/svg/movie.svg?raw'
+import logger from '../logger.ts'
 
 export interface ITypePreset {
 	id: string
@@ -27,95 +20,19 @@ export interface ITypePreset {
 	mime: string[]
 }
 
-const colorize = (svg: string, color: string) => {
-	return svg.replace('<path ', `<path fill="${color}" `)
-}
+const tagName = 'files-file-list-filter-type'
 
-/**
- * Available presets
- */
-const getTypePresets = async () => [
-	{
-		id: 'document',
-		label: t('files', 'Documents'),
-		icon: colorize(svgDocument, '#49abea'),
-		mime: ['x-office/document'],
-	},
-	{
-		id: 'spreadsheet',
-		label: t('files', 'Spreadsheets'),
-		icon: colorize(svgSpreadsheet, '#9abd4e'),
-		mime: ['x-office/spreadsheet'],
-	},
-	{
-		id: 'presentation',
-		label: t('files', 'Presentations'),
-		icon: colorize(svgPresentation, '#f0965f'),
-		mime: ['x-office/presentation'],
-	},
-	{
-		id: 'pdf',
-		label: t('files', 'PDFs'),
-		icon: colorize(svgPDF, '#dc5047'),
-		mime: ['application/pdf'],
-	},
-	{
-		id: 'folder',
-		label: t('files', 'Folders'),
-		icon: colorize(svgFolder, window.getComputedStyle(document.body).getPropertyValue('--color-primary-element')),
-		mime: ['httpd/unix-directory'],
-	},
-	{
-		id: 'audio',
-		label: t('files', 'Audio'),
-		icon: svgAudio,
-		mime: ['audio'],
-	},
-	{
-		id: 'image',
-		// TRANSLATORS: This is for filtering files, e.g. PNG or JPEG, so photos, drawings, or images in general
-		label: t('files', 'Photos and images'),
-		icon: svgImage,
-		mime: ['image'],
-	},
-	{
-		id: 'video',
-		label: t('files', 'Videos'),
-		icon: svgMovie,
-		mime: ['video'],
-	},
-] as ITypePreset[]
-
-class TypeFilter extends FileListFilter {
-
+class TypeFilter extends FileListFilter implements IFileListFilterWithUi {
 	private currentInstance?: Vue
-	private currentPresets?: ITypePreset[]
-	private allPresets?: ITypePreset[]
+	private currentPresets: ITypePreset[]
+
+	public readonly displayName = t('files', 'Type')
+	public readonly iconSvgInline = svgFileOutline
+	public readonly tagName = tagName
 
 	constructor() {
 		super('files:type', 10)
-		subscribe('files:navigation:changed', () => this.setPreset())
-	}
-
-	public async mount(el: HTMLElement) {
-		// We need to defer this as on init script this is not available:
-		if (this.allPresets === undefined) {
-			this.allPresets = await getTypePresets()
-		}
-
-		if (this.currentInstance) {
-			this.currentInstance.$destroy()
-		}
-
-		const View = Vue.extend(FileListFilterType as never)
-		this.currentInstance = new View({
-			propsData: {
-				typePresets: this.allPresets!,
-			},
-			el,
-		})
-			.$on('update:preset', this.setPreset.bind(this))
-			.$mount()
+		this.currentPresets = []
 	}
 
 	public filter(nodes: INode[]): INode[] {
@@ -141,8 +58,25 @@ class TypeFilter extends FileListFilter {
 		})
 	}
 
-	public setPreset(presets?: ITypePreset[]) {
-		this.currentPresets = presets
+	public reset(): void {
+		// to be listener by the component
+		this.dispatchEvent(new CustomEvent('reset'))
+	}
+
+	public get presets(): ITypePreset[] {
+		return this.currentPresets
+	}
+
+	public setPresets(presets?: ITypePreset[]) {
+		logger.debug('TypeFilter: setting presets', { presets })
+
+		this.currentPresets = presets ?? []
+		if (this.currentInstance !== undefined) {
+			// could be called before the instance was created
+			// (meaning the files list is not mounted yet)
+			this.currentInstance.$props.presets = presets
+		}
+
 		this.filterUpdated()
 
 		const chips: IFileListFilterChip[] = []
@@ -151,7 +85,7 @@ class TypeFilter extends FileListFilter {
 				chips.push({
 					icon: preset.icon,
 					text: preset.label,
-					onclick: () => this.setPreset(presets.filter(({ id }) => id !== preset.id)),
+					onclick: () => this.removeFilterPreset(preset.id),
 				})
 			}
 		} else {
@@ -160,11 +94,39 @@ class TypeFilter extends FileListFilter {
 		this.updateChips(chips)
 	}
 
+	/**
+	 * Helper callback that removed a preset from selected.
+	 * This is used when clicking on "remove" on a filter-chip.
+	 *
+	 * @param presetId Id of preset to remove
+	 */
+	private removeFilterPreset(presetId: string) {
+		const filtered = this.currentPresets.filter(({ id }) => id !== presetId)
+		this.dispatchEvent(new CustomEvent('deselect', { detail: presetId }))
+		this.setPresets(filtered)
+	}
 }
+
+export type { TypeFilter }
 
 /**
  * Register the file list filter by file type
  */
 export function registerTypeFilter() {
+	const WrappedComponent = wrap(Vue, FileListFilterType)
+	// In Vue 2, wrap doesn't support disabling shadow :(
+	// Disable with a hack
+	Object.defineProperty(WrappedComponent.prototype, 'attachShadow', {
+		value() {
+			return this
+		},
+	})
+	Object.defineProperty(WrappedComponent.prototype, 'shadowRoot', {
+		get() {
+			return this
+		},
+	})
+
+	window.customElements.define(tagName, WrappedComponent)
 	registerFileListFilter(new TypeFilter())
 }

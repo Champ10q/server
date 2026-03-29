@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -17,6 +18,7 @@ use OCP\IRequest;
 use OCP\ISession;
 use OCP\IUser;
 use OCP\IUserSession;
+use OCP\Server;
 use Psr\Log\LoggerInterface;
 use Test\AppFramework\Middleware\Security\Mock\PasswordConfirmationMiddlewareController;
 use Test\TestCase;
@@ -44,7 +46,7 @@ class PasswordConfirmationMiddlewareTest extends TestCase {
 	private Manager $userManager;
 
 	protected function setUp(): void {
-		$this->reflector = new ControllerMethodReflector();
+		$this->reflector = new ControllerMethodReflector(Server::get(LoggerInterface::class));
 		$this->session = $this->createMock(ISession::class);
 		$this->userSession = $this->createMock(IUserSession::class);
 		$this->user = $this->createMock(IUser::class);
@@ -90,9 +92,7 @@ class PasswordConfirmationMiddlewareTest extends TestCase {
 		$this->middleware->beforeController($this->controller, __FUNCTION__);
 	}
 
-	/**
-	 * @dataProvider dataProvider
-	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataProvider')]
 	public function testAnnotation($backend, $lastConfirm, $currentTime, $exception): void {
 		$this->reflector->reflect($this->controller, __FUNCTION__);
 
@@ -125,9 +125,7 @@ class PasswordConfirmationMiddlewareTest extends TestCase {
 		$this->assertSame($exception, $thrown);
 	}
 
-	/**
-	 * @dataProvider dataProvider
-	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataProvider')]
 	public function testAttribute($backend, $lastConfirm, $currentTime, $exception): void {
 		$this->reflector->reflect($this->controller, __FUNCTION__);
 
@@ -162,7 +160,7 @@ class PasswordConfirmationMiddlewareTest extends TestCase {
 
 
 
-	public function dataProvider() {
+	public static function dataProvider(): array {
 		return [
 			['foo', 2000, 4000, true],
 			['foo', 2000, 3000, false],

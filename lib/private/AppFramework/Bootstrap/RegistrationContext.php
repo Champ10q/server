@@ -10,7 +10,6 @@ declare(strict_types=1);
 namespace OC\AppFramework\Bootstrap;
 
 use Closure;
-use NCU\Config\Lexicon\IConfigLexicon;
 use OC\Support\CrashReport\Registry;
 use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
@@ -22,21 +21,25 @@ use OCP\Calendar\Resource\IBackend as IResourceBackend;
 use OCP\Calendar\Room\IBackend as IRoomBackend;
 use OCP\Capabilities\ICapability;
 use OCP\Collaboration\Reference\IReferenceProvider;
+use OCP\Config\Lexicon\ILexicon;
 use OCP\Dashboard\IManager;
 use OCP\Dashboard\IWidget;
 use OCP\EventDispatcher\IEventDispatcher;
+use OCP\Files\Conversion\IConversionProvider;
 use OCP\Files\Template\ICustomTemplateProvider;
 use OCP\Http\WellKnown\IHandler;
 use OCP\Mail\Provider\IProvider as IMailProvider;
 use OCP\Notification\INotifier;
 use OCP\Profile\ILinkAction;
 use OCP\Search\IProvider;
+use OCP\Server;
 use OCP\Settings\IDeclarativeSettingsForm;
 use OCP\SetupCheck\ISetupCheck;
 use OCP\Share\IPublicShareTemplateProvider;
 use OCP\SpeechToText\ISpeechToTextProvider;
 use OCP\Support\CrashReport\IReporter;
 use OCP\Talk\ITalkBackend;
+use OCP\TaskProcessing\ITaskType;
 use OCP\Teams\ITeamResourceProvider;
 use OCP\TextProcessing\IProvider as ITextProcessingProvider;
 use OCP\Translation\ITranslationProvider;
@@ -131,8 +134,6 @@ class RegistrationContext {
 	/** @var ServiceRegistration<IPublicShareTemplateProvider>[] */
 	private $publicShareTemplateProviders = [];
 
-	private LoggerInterface $logger;
-
 	/** @var ServiceRegistration<ISetupCheck>[] */
 	private array $setupChecks = [];
 
@@ -151,27 +152,26 @@ class RegistrationContext {
 	/** @var ServiceRegistration<\OCP\TaskProcessing\IProvider>[] */
 	private array $taskProcessingProviders = [];
 
-	/** @var ServiceRegistration<\OCP\TaskProcessing\ITaskType>[] */
+	/** @var ServiceRegistration<ITaskType>[] */
 	private array $taskProcessingTaskTypes = [];
-	
+
+	/** @var ServiceRegistration<IConversionProvider>[] */
+	private array $fileConversionProviders = [];
+
 	/** @var ServiceRegistration<IMailProvider>[] */
 	private $mailProviders = [];
 
-	public function __construct(LoggerInterface $logger) {
-		$this->logger = $logger;
+	public function __construct(
+		private LoggerInterface $logger,
+	) {
 	}
 
 	public function for(string $appId): IRegistrationContext {
 		return new class($appId, $this) implements IRegistrationContext {
-			/** @var string */
-			private $appId;
-
-			/** @var RegistrationContext */
-			private $context;
-
-			public function __construct(string $appId, RegistrationContext $context) {
-				$this->appId = $appId;
-				$this->context = $context;
+			public function __construct(
+				private string $appId,
+				private RegistrationContext $context,
+			) {
 			}
 
 			public function registerCapability(string $capability): void {
@@ -420,6 +420,13 @@ class RegistrationContext {
 				);
 			}
 
+			public function registerFileConversionProvider(string $class): void {
+				$this->context->registerFileConversionProvider(
+					$this->appId,
+					$class
+				);
+			}
+
 			public function registerMailProvider(string $class): void {
 				$this->context->registerMailProvider(
 					$this->appId,
@@ -620,11 +627,19 @@ class RegistrationContext {
 	}
 
 	/**
-	 * @psalm-param class-string<\OCP\TaskProcessing\ITaskType> $declarativeSettingsClass
+	 * @psalm-param class-string<ITaskType> $declarativeSettingsClass
 	 */
 	public function registerTaskProcessingTaskType(string $appId, string $taskProcessingTaskTypeClass) {
 		$this->taskProcessingTaskTypes[] = new ServiceRegistration($appId, $taskProcessingTaskTypeClass);
 	}
+
+	/**
+	 * @psalm-param class-string<IConversionProvider> $class
+	 */
+	public function registerFileConversionProvider(string $appId, string $class): void {
+		$this->fileConversionProviders[] = new ServiceRegistration($appId, $class);
+	}
+
 	/**
 	 * @psalm-param class-string<IMailProvider> $migratorClass
 	 */
@@ -633,7 +648,7 @@ class RegistrationContext {
 	}
 
 	/**
-	 * @psalm-param class-string<IConfigLexicon> $configLexiconClass
+	 * @psalm-param class-string<ILexicon> $configLexiconClass
 	 */
 	public function registerConfigLexicon(string $appId, string $configLexiconClass): void {
 		$this->configLexiconClasses[$appId] = $configLexiconClass;
@@ -978,10 +993,17 @@ class RegistrationContext {
 	}
 
 	/**
-	 * @return ServiceRegistration<\OCP\TaskProcessing\ITaskType>[]
+	 * @return ServiceRegistration<ITaskType>[]
 	 */
 	public function getTaskProcessingTaskTypes(): array {
 		return $this->taskProcessingTaskTypes;
+	}
+
+	/**
+	 * @return ServiceRegistration<IConversionProvider>[]
+	 */
+	public function getFileConversionProviders(): array {
+		return $this->fileConversionProviders;
 	}
 
 	/**
@@ -997,13 +1019,13 @@ class RegistrationContext {
 	 *
 	 * @param string $appId
 	 *
-	 * @return IConfigLexicon|null
+	 * @return ILexicon|null
 	 */
-	public function getConfigLexicon(string $appId): ?IConfigLexicon {
+	public function getConfigLexicon(string $appId): ?ILexicon {
 		if (!array_key_exists($appId, $this->configLexiconClasses)) {
 			return null;
 		}
 
-		return \OCP\Server::get($this->configLexiconClasses[$appId]);
+		return Server::get($this->configLexiconClasses[$appId]);
 	}
 }

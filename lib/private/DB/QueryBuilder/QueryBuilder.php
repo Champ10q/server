@@ -9,7 +9,6 @@ namespace OC\DB\QueryBuilder;
 
 use Doctrine\DBAL\Query\QueryException;
 use OC\DB\ConnectionAdapter;
-use OC\DB\Exceptions\DbalException;
 use OC\DB\QueryBuilder\ExpressionBuilder\MySqlExpressionBuilder;
 use OC\DB\QueryBuilder\ExpressionBuilder\OCIExpressionBuilder;
 use OC\DB\QueryBuilder\ExpressionBuilder\PgSqlExpressionBuilder;
@@ -20,47 +19,35 @@ use OC\DB\QueryBuilder\FunctionBuilder\PgSqlFunctionBuilder;
 use OC\DB\QueryBuilder\FunctionBuilder\SqliteFunctionBuilder;
 use OC\SystemConfig;
 use OCP\DB\IResult;
+use OCP\DB\QueryBuilder\ConflictResolutionMode;
 use OCP\DB\QueryBuilder\ICompositeExpression;
+use OCP\DB\QueryBuilder\IExpressionBuilder;
+use OCP\DB\QueryBuilder\IFunctionBuilder;
 use OCP\DB\QueryBuilder\ILiteral;
 use OCP\DB\QueryBuilder\IParameter;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\DB\QueryBuilder\IQueryFunction;
 use OCP\IDBConnection;
+use Override;
 use Psr\Log\LoggerInterface;
+use RuntimeException;
 
-class QueryBuilder implements IQueryBuilder {
-	/** @var ConnectionAdapter */
-	private $connection;
-
-	/** @var SystemConfig */
-	private $systemConfig;
-
-	private LoggerInterface $logger;
-
-	/** @var \Doctrine\DBAL\Query\QueryBuilder */
-	private $queryBuilder;
-
-	/** @var QuoteHelper */
-	private $helper;
-
-	/** @var bool */
-	private $automaticTablePrefix = true;
+class QueryBuilder extends TypedQueryBuilder {
+	private \Doctrine\DBAL\Query\QueryBuilder $queryBuilder;
+	private QuoteHelper $helper;
+	private bool $automaticTablePrefix = true;
 	private bool $nonEmptyWhere = false;
-
-	/** @var string */
-	protected $lastInsertedTable;
+	protected ?string $lastInsertedTable = null;
 	private array $selectedColumns = [];
 
 	/**
 	 * Initializes a new QueryBuilder.
-	 *
-	 * @param ConnectionAdapter $connection
-	 * @param SystemConfig $systemConfig
 	 */
-	public function __construct(ConnectionAdapter $connection, SystemConfig $systemConfig, LoggerInterface $logger) {
-		$this->connection = $connection;
-		$this->systemConfig = $systemConfig;
-		$this->logger = $logger;
+	public function __construct(
+		private ConnectionAdapter $connection,
+		private SystemConfig $systemConfig,
+		private LoggerInterface $logger,
+	) {
 		$this->queryBuilder = new \Doctrine\DBAL\Query\QueryBuilder($this->connection->getInner());
 		$this->helper = new QuoteHelper();
 	}
@@ -90,12 +77,13 @@ class QueryBuilder implements IQueryBuilder {
 	 * For more complex expression construction, consider storing the expression
 	 * builder object in a local variable.
 	 *
-	 * @return \OCP\DB\QueryBuilder\IExpressionBuilder
+	 * @return IExpressionBuilder
 	 */
 	public function expr() {
 		return match($this->connection->getDatabaseProvider()) {
 			IDBConnection::PLATFORM_ORACLE => new OCIExpressionBuilder($this->connection, $this, $this->logger),
 			IDBConnection::PLATFORM_POSTGRES => new PgSqlExpressionBuilder($this->connection, $this, $this->logger),
+			IDBConnection::PLATFORM_MARIADB,
 			IDBConnection::PLATFORM_MYSQL => new MySqlExpressionBuilder($this->connection, $this, $this->logger),
 			IDBConnection::PLATFORM_SQLITE => new SqliteExpressionBuilder($this->connection, $this, $this->logger),
 		};
@@ -115,12 +103,13 @@ class QueryBuilder implements IQueryBuilder {
 	 * For more complex function construction, consider storing the function
 	 * builder object in a local variable.
 	 *
-	 * @return \OCP\DB\QueryBuilder\IFunctionBuilder
+	 * @return IFunctionBuilder
 	 */
 	public function func() {
 		return match($this->connection->getDatabaseProvider()) {
 			IDBConnection::PLATFORM_ORACLE => new OCIFunctionBuilder($this->connection, $this, $this->helper),
 			IDBConnection::PLATFORM_POSTGRES => new PgSqlFunctionBuilder($this->connection, $this, $this->helper),
+			IDBConnection::PLATFORM_MARIADB,
 			IDBConnection::PLATFORM_MYSQL => new FunctionBuilder($this->connection, $this, $this->helper),
 			IDBConnection::PLATFORM_SQLITE => new SqliteFunctionBuilder($this->connection, $this, $this->helper),
 		};
@@ -138,7 +127,7 @@ class QueryBuilder implements IQueryBuilder {
 	/**
 	 * Gets the associated DBAL Connection for this query builder.
 	 *
-	 * @return \OCP\IDBConnection
+	 * @return IDBConnection
 	 */
 	public function getConnection() {
 		return $this->connection;
@@ -161,7 +150,7 @@ class QueryBuilder implements IQueryBuilder {
 			try {
 				$params = [];
 				foreach ($this->getParameters() as $placeholder => $value) {
-					if ($value instanceof \DateTime) {
+					if ($value instanceof \DateTimeInterface) {
 						$params[] = $placeholder . ' => DateTime:\'' . $value->format('c') . '\'';
 					} elseif (is_array($value)) {
 						$params[] = $placeholder . ' => (\'' . implode('\', \'', $value) . '\')';
@@ -252,33 +241,9 @@ class QueryBuilder implements IQueryBuilder {
 		}
 	}
 
-	/**
-	 * Executes this query using the bound parameters and their types.
-	 *
-	 * Uses {@see Connection::executeQuery} for select statements and {@see Connection::executeUpdate}
-	 * for insert, update and delete statements.
-	 *
-	 * @return IResult|int
-	 */
-	public function execute(?IDBConnection $connection = null) {
-		try {
-			if ($this->getType() === \Doctrine\DBAL\Query\QueryBuilder::SELECT) {
-				return $this->executeQuery($connection);
-			} else {
-				return $this->executeStatement($connection);
-			}
-		} catch (DBALException $e) {
-			// `IQueryBuilder->execute` never wrapped the exception, but `executeQuery` and `executeStatement` do
-			/** @var \Doctrine\DBAL\Exception $previous */
-			$previous = $e->getPrevious();
-
-			throw $previous;
-		}
-	}
-
 	public function executeQuery(?IDBConnection $connection = null): IResult {
 		if ($this->getType() !== \Doctrine\DBAL\Query\QueryBuilder::SELECT) {
-			throw new \RuntimeException('Invalid query type, expected SELECT query');
+			throw new RuntimeException('Invalid query type, expected SELECT query');
 		}
 
 		$this->prepareForExecute();
@@ -295,7 +260,7 @@ class QueryBuilder implements IQueryBuilder {
 
 	public function executeStatement(?IDBConnection $connection = null): int {
 		if ($this->getType() === \Doctrine\DBAL\Query\QueryBuilder::SELECT) {
-			throw new \RuntimeException('Invalid query type, expected INSERT, DELETE or UPDATE statement');
+			throw new RuntimeException('Invalid query type, expected INSERT, DELETE or UPDATE statement');
 		}
 
 		$this->prepareForExecute();
@@ -512,7 +477,7 @@ class QueryBuilder implements IQueryBuilder {
 	 *
 	 * @return $this This QueryBuilder instance.
 	 */
-	public function selectAlias($select, $alias) {
+	public function selectAlias($select, $alias): self {
 		$this->queryBuilder->addSelect(
 			$this->helper->quoteColumnName($select) . ' AS ' . $this->helper->quoteColumnName($alias)
 		);
@@ -560,18 +525,18 @@ class QueryBuilder implements IQueryBuilder {
 	 *         ->leftJoin('u', 'phonenumbers', 'u.id = p.user_id');
 	 * </code>
 	 *
-	 * @param mixed ...$selects The selection expression.
+	 * @param mixed ...$select The selection expression.
 	 *
 	 * @return $this This QueryBuilder instance.
 	 */
-	public function addSelect(...$selects) {
-		if (count($selects) === 1 && is_array($selects[0])) {
-			$selects = $selects[0];
+	public function addSelect(...$select) {
+		if (count($select) === 1 && is_array($select[0])) {
+			$select = $select[0];
 		}
-		$this->addOutputColumns($selects);
+		$this->addOutputColumns($select);
 
 		$this->queryBuilder->addSelect(
-			$this->helper->quoteColumnNames($selects)
+			$this->helper->quoteColumnNames($select)
 		);
 
 		return $this;
@@ -1013,7 +978,7 @@ class QueryBuilder implements IQueryBuilder {
 	 * </code>
 	 *
 	 * @param string $column The column into which the value should be inserted.
-	 * @param IParameter|string $value The value that should be inserted into the column.
+	 * @param IParameter|IQueryFunction|string $value The value that should be inserted into the column.
 	 *
 	 * @return $this This QueryBuilder instance.
 	 */
@@ -1117,6 +1082,10 @@ class QueryBuilder implements IQueryBuilder {
 	 * @return $this This QueryBuilder instance.
 	 */
 	public function orderBy($sort, $order = null) {
+		if ($order !== null && !in_array(strtoupper((string)$order), ['ASC', 'DESC'], true)) {
+			$order = null;
+		}
+
 		$this->queryBuilder->orderBy(
 			$this->helper->quoteColumnName($sort),
 			$order
@@ -1134,6 +1103,10 @@ class QueryBuilder implements IQueryBuilder {
 	 * @return $this This QueryBuilder instance.
 	 */
 	public function addOrderBy($sort, $order = null) {
+		if ($order !== null && !in_array(strtoupper((string)$order), ['ASC', 'DESC'], true)) {
+			$order = null;
+		}
+
 		$this->queryBuilder->addOrderBy(
 			$this->helper->quoteColumnName($sort),
 			$order
@@ -1339,6 +1312,8 @@ class QueryBuilder implements IQueryBuilder {
 	/**
 	 * Returns the table name with database prefix as needed by the implementation
 	 *
+	 * Was protected until version 30.
+	 *
 	 * @param string $table
 	 * @return string
 	 */
@@ -1392,4 +1367,12 @@ class QueryBuilder implements IQueryBuilder {
 		return $this;
 	}
 
+	#[Override]
+	public function forUpdate(ConflictResolutionMode $conflictResolutionMode = ConflictResolutionMode::Ordinary): self {
+		match ($conflictResolutionMode) {
+			ConflictResolutionMode::Ordinary => $this->queryBuilder->forUpdate(),
+			ConflictResolutionMode::SkipLocked => $this->queryBuilder->forUpdate(\Doctrine\DBAL\Query\ForUpdate\ConflictResolutionMode::SKIP_LOCKED),
+		};
+		return $this;
+	}
 }

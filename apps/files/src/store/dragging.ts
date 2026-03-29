@@ -2,7 +2,8 @@
  * SPDX-FileCopyrightText: 2023 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import type { DragAndDropStore, FileSource } from '../types'
+
+import type { DragAndDropStore, FileSource } from '../types.ts'
 
 import { defineStore } from 'pinia'
 import Vue from 'vue'
@@ -14,8 +15,9 @@ export const useDragAndDropStore = defineStore('dragging', {
 
 	actions: {
 		/**
-		 * Set the selection of fileIds
-		 * @param selection
+		 * Set the selection of files being dragged currently
+		 *
+		 * @param selection array of node sources
 		 */
 		set(selection = [] as FileSource[]) {
 			Vue.set(this, 'dragging', selection)

@@ -9,11 +9,11 @@ declare(strict_types=1);
 namespace OC\Security\Signature\Model;
 
 use JsonSerializable;
-use NCU\Security\Signature\Enum\DigestAlgorithm;
-use NCU\Security\Signature\Exceptions\SignatoryNotFoundException;
-use NCU\Security\Signature\Exceptions\SignatureElementNotFoundException;
-use NCU\Security\Signature\ISignedRequest;
-use NCU\Security\Signature\Model\Signatory;
+use OCP\Security\Signature\Enum\DigestAlgorithm;
+use OCP\Security\Signature\Exceptions\SignatoryNotFoundException;
+use OCP\Security\Signature\Exceptions\SignatureElementNotFoundException;
+use OCP\Security\Signature\ISignedRequest;
+use OCP\Security\Signature\Model\Signatory;
 
 /**
  * @inheritDoc
@@ -74,8 +74,8 @@ class SignedRequest implements ISignedRequest, JsonSerializable {
 	 */
 	public function getDigest(): string {
 		if ($this->digest === '') {
-			$this->digest = $this->digestAlgorithm->value . '=' .
-							base64_encode(hash($this->digestAlgorithm->getHashingAlgorithm(), $this->body, true));
+			$this->digest = $this->digestAlgorithm->value . '='
+							. base64_encode(hash($this->digestAlgorithm->getHashingAlgorithm(), $this->body, true));
 		}
 		return $this->digest;
 	}

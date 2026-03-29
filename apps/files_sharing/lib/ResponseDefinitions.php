@@ -22,6 +22,7 @@ namespace OCA\Files_Sharing;
  *     file_target: string,
  *     has_preview: bool,
  *     hide_download: 0|1,
+ *     is_trusted_server?: bool,
  *     is-mount-root: bool,
  *     id: string,
  *     item_mtime: int,
@@ -80,15 +81,15 @@ namespace OCA\Files_Sharing;
  * }
  *
  * @psalm-type Files_SharingRemoteShare = array{
- *     accepted: bool,
+ *     accepted: int,
  *     file_id: int|null,
- *     id: int,
+ *     id: string,
  *     mimetype: string|null,
  *     mountpoint: string,
  *     mtime: int|null,
  *     name: string,
  *     owner: string,
- *     parent: int|null,
+ *     parent: string|null,
  *     permissions: int|null,
  *     remote: string,
  *     remote_id: string,
@@ -96,16 +97,24 @@ namespace OCA\Files_Sharing;
  *     share_type: int,
  *     type: string|null,
  *     user: string,
+ *     item_size: int|float|null,
  * }
  *
  * @psalm-type Files_SharingSharee = array{
- *     count: int|null,
  *     label: string,
  * }
  *
  * @psalm-type Files_SharingShareeValue = array{
  *     shareType: int,
  *     shareWith: string,
+ * }
+ *
+ * @psalm-type Files_SharingShareeGroup = Files_SharingSharee&array{
+ *     value: Files_SharingShareeValue,
+ * }
+ *
+ * @psalm-type Files_SharingShareeRoom = Files_SharingSharee&array{
+ *     value: Files_SharingShareeValue,
  * }
  *
  * @psalm-type Files_SharingShareeUser = Files_SharingSharee&array{
@@ -180,19 +189,19 @@ namespace OCA\Files_Sharing;
  *     exact: array{
  *         circles: list<Files_SharingShareeCircle>,
  *         emails: list<Files_SharingShareeEmail>,
- *         groups: list<Files_SharingSharee>,
+ *         groups: list<Files_SharingShareeGroup>,
  *         remote_groups: list<Files_SharingShareeRemoteGroup>,
  *         remotes: list<Files_SharingShareeRemote>,
- *         rooms: list<Files_SharingSharee>,
+ *         rooms: list<Files_SharingShareeRoom>,
  *         users: list<Files_SharingShareeUser>,
  *     },
  *     circles: list<Files_SharingShareeCircle>,
  *     emails: list<Files_SharingShareeEmail>,
- *     groups: list<Files_SharingSharee>,
+ *     groups: list<Files_SharingShareeGroup>,
  *     lookup: list<Files_SharingShareeLookup>,
  *     remote_groups: list<Files_SharingShareeRemoteGroup>,
  *     remotes: list<Files_SharingShareeRemote>,
- *     rooms: list<Files_SharingSharee>,
+ *     rooms: list<Files_SharingShareeRoom>,
  *     users: list<Files_SharingShareeUser>,
  *     lookupEnabled: bool,
  * }
@@ -200,13 +209,13 @@ namespace OCA\Files_Sharing;
  * @psalm-type Files_SharingShareesRecommendedResult = array{
  *     exact: array{
  *         emails: list<Files_SharingShareeEmail>,
- *         groups: list<Files_SharingSharee>,
+ *         groups: list<Files_SharingShareeGroup>,
  *         remote_groups: list<Files_SharingShareeRemoteGroup>,
  *         remotes: list<Files_SharingShareeRemote>,
  *         users: list<Files_SharingShareeUser>,
  *     },
  *     emails: list<Files_SharingShareeEmail>,
- *     groups: list<Files_SharingSharee>,
+ *     groups: list<Files_SharingShareeGroup>,
  *     remote_groups: list<Files_SharingShareeRemoteGroup>,
  *     remotes: list<Files_SharingShareeRemote>,
  *     users: list<Files_SharingShareeUser>,

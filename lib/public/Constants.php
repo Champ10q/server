@@ -18,12 +18,6 @@ namespace OCP;
  */
 class Constants {
 	/**
-	 * CRUDS permissions.
-	 * @since 8.0.0
-	 */
-	public const PERMISSION_CREATE = 4;
-
-	/**
 	 * @since 8.0.0
 	 */
 	public const PERMISSION_READ = 1;
@@ -32,6 +26,12 @@ class Constants {
 	 * @since 8.0.0
 	 */
 	public const PERMISSION_UPDATE = 2;
+
+	/**
+	 * CRUDS permissions.
+	 * @since 8.0.0
+	 */
+	public const PERMISSION_CREATE = 4;
 
 	/**
 	 * @since 8.0.0
@@ -59,4 +59,12 @@ class Constants {
 	 * cf. sharing.maxAutocompleteResults in config.sample.php.
 	 */
 	public const SHARING_MAX_AUTOCOMPLETE_RESULTS_DEFAULT = 25;
+
+	/**
+	 * Replacement for the built-in `DATE_RFC7231` constant
+	 * deprecated since PHP 8.5.
+	 *
+	 * @since 34.0.0
+	 */
+	public const DATE_RFC7231 = 'D, d M Y H:i:s \G\M\T';
 }

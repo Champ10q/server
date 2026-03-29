@@ -5,8 +5,8 @@
 <script setup lang="ts">
 import { t } from '@nextcloud/l10n'
 import { computed, ref } from 'vue'
-import NcDialog from '@nextcloud/vue/dist/Components/NcDialog.js'
-import NcPasswordField from '@nextcloud/vue/dist/Components/NcPasswordField.js'
+import NcDialog from '@nextcloud/vue/components/NcDialog'
+import NcPasswordField from '@nextcloud/vue/components/NcPasswordField'
 
 const props = defineProps<{
 	/** Name of the share */
@@ -20,48 +20,49 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-	(e: 'close', state: boolean, password?: string): void
+	close: [state: boolean, password?: string]
 }>()
 
 const password = ref('')
 
+type INcDialogButtons = InstanceType<typeof NcDialog>['$props']['buttons']
+
 /**
  * The dialog buttons
  */
-const buttons = computed(() => [
+const buttons = computed<INcDialogButtons>(() => [
 	{
 		label: t('federatedfilesharing', 'Cancel'),
 		callback: () => emit('close', false),
 	},
 	{
 		label: t('federatedfilesharing', 'Add remote share'),
-		nativeType: props.passwordRequired ? 'submit' : undefined,
-		type: 'primary',
+		type: props.passwordRequired ? 'submit' : undefined,
+		variant: 'primary',
 		callback: () => emit('close', true, password.value),
 	},
 ])
 </script>
 
 <template>
-	<NcDialog :buttons="buttons"
-		:is-form="passwordRequired"
+	<NcDialog
+		:buttons="buttons"
+		:isForm="passwordRequired"
 		:name="t('federatedfilesharing', 'Remote share')"
 		@submit="emit('close', true, password)">
 		<p>
 			{{ t('federatedfilesharing', 'Do you want to add the remote share {name} from {owner}@{remote}?', { name, owner, remote }) }}
 		</p>
-		<NcPasswordField v-if="passwordRequired"
-			class="remote-share-dialog__password"
-			:label="t('federatedfilesharing', 'Remote share password')"
-			:value.sync="password" />
+		<NcPasswordField
+			v-if="passwordRequired"
+			v-model="password"
+			:class="$style.remoteShareDialog__password"
+			:label="t('federatedfilesharing', 'Remote share password')" />
 	</NcDialog>
 </template>
 
-<style scoped lang="scss">
-.remote-share-dialog {
-
-	&__password {
-		margin-block: 1em .5em;
-	}
+<style module>
+.remoteShareDialog__password {
+	margin-block: 1em .5em;
 }
 </style>

@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -24,18 +25,9 @@ use Psr\Log\LoggerInterface;
 class GlobalStoragesController extends StoragesController {
 	/**
 	 * Creates a new global storages controller.
-	 *
-	 * @param string $AppName application name
-	 * @param IRequest $request request object
-	 * @param IL10N $l10n l10n service
-	 * @param GlobalStoragesService $globalStoragesService storage service
-	 * @param LoggerInterface $logger
-	 * @param IUserSession $userSession
-	 * @param IGroupManager $groupManager
-	 * @param IConfig $config
 	 */
 	public function __construct(
-		$AppName,
+		string $appName,
 		IRequest $request,
 		IL10N $l10n,
 		GlobalStoragesService $globalStoragesService,
@@ -45,7 +37,7 @@ class GlobalStoragesController extends StoragesController {
 		IConfig $config,
 	) {
 		parent::__construct(
-			$AppName,
+			$appName,
 			$request,
 			$l10n,
 			$globalStoragesService,
@@ -63,24 +55,22 @@ class GlobalStoragesController extends StoragesController {
 	 * @param string $backend backend identifier
 	 * @param string $authMechanism authentication mechanism identifier
 	 * @param array $backendOptions backend-specific options
-	 * @param array $mountOptions mount-specific options
-	 * @param array $applicableUsers users for which to mount the storage
-	 * @param array $applicableGroups groups for which to mount the storage
-	 * @param int $priority priority
-	 *
-	 * @return DataResponse
+	 * @param ?array $mountOptions mount-specific options
+	 * @param ?array $applicableUsers users for which to mount the storage
+	 * @param ?array $applicableGroups groups for which to mount the storage
+	 * @param ?int $priority priority
 	 */
 	#[PasswordConfirmationRequired(strict: true)]
 	public function create(
-		$mountPoint,
-		$backend,
-		$authMechanism,
-		$backendOptions,
-		$mountOptions,
-		$applicableUsers,
-		$applicableGroups,
-		$priority,
-	) {
+		string $mountPoint,
+		string $backend,
+		string $authMechanism,
+		array $backendOptions,
+		?array $mountOptions,
+		?array $applicableUsers,
+		?array $applicableGroups,
+		?int $priority,
+	): DataResponse {
 		$canCreateNewLocalStorage = $this->config->getSystemValue('files_external_allow_create_new_local', true);
 		if (!$canCreateNewLocalStorage && $backend === 'local') {
 			return new DataResponse(
@@ -128,27 +118,23 @@ class GlobalStoragesController extends StoragesController {
 	 * @param string $backend backend identifier
 	 * @param string $authMechanism authentication mechanism identifier
 	 * @param array $backendOptions backend-specific options
-	 * @param array $mountOptions mount-specific options
-	 * @param array $applicableUsers users for which to mount the storage
-	 * @param array $applicableGroups groups for which to mount the storage
-	 * @param int $priority priority
-	 * @param bool $testOnly whether to storage should only test the connection or do more things
-	 *
-	 * @return DataResponse
+	 * @param ?array $mountOptions mount-specific options
+	 * @param ?array $applicableUsers users for which to mount the storage
+	 * @param ?array $applicableGroups groups for which to mount the storage
+	 * @param ?int $priority priority
 	 */
 	#[PasswordConfirmationRequired(strict: true)]
 	public function update(
-		$id,
-		$mountPoint,
-		$backend,
-		$authMechanism,
-		$backendOptions,
-		$mountOptions,
-		$applicableUsers,
-		$applicableGroups,
-		$priority,
-		$testOnly = true,
-	) {
+		int $id,
+		string $mountPoint,
+		string $backend,
+		string $authMechanism,
+		array $backendOptions,
+		?array $mountOptions,
+		?array $applicableUsers,
+		?array $applicableGroups,
+		?int $priority,
+	): DataResponse {
 		$storage = $this->createStorage(
 			$mountPoint,
 			$backend,
@@ -180,7 +166,7 @@ class GlobalStoragesController extends StoragesController {
 			);
 		}
 
-		$this->updateStorageStatus($storage, $testOnly);
+		$this->updateStorageStatus($storage);
 
 		return new DataResponse(
 			$storage->jsonSerialize(true),

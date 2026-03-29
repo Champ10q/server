@@ -13,6 +13,7 @@ use OC\Files\Storage\Wrapper\Encryption;
 use OC\Files\View;
 use OCP\Files\Mount\IMountManager;
 use OCP\Files\Storage\IDisableEncryptionStorage;
+use OCP\Server;
 use Test\TestCase;
 use Test\Traits\EncryptionTrait;
 use Test\Traits\MountProviderTrait;
@@ -22,9 +23,7 @@ class TemporaryNoEncrypted extends Temporary implements IDisableEncryptionStorag
 
 }
 
-/**
- * @group DB
- */
+#[\PHPUnit\Framework\Attributes\Group(name: 'DB')]
 class EncryptedStorageTest extends TestCase {
 	use MountProviderTrait;
 	use EncryptionTrait;
@@ -44,7 +43,7 @@ class EncryptedStorageTest extends TestCase {
 		$view = new View('/test1/files');
 
 		/** @var IMountManager $mountManager */
-		$mountManager = \OC::$server->get(IMountManager::class);
+		$mountManager = Server::get(IMountManager::class);
 
 		$encryptedMount = $mountManager->find('/test1/files/enc');
 		$unencryptedMount = $mountManager->find('/test1/files/unenc');

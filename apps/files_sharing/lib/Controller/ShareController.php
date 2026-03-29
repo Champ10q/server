@@ -1,4 +1,5 @@
 <?php
+
 /**
  * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
@@ -6,21 +7,21 @@
  */
 namespace OCA\Files_Sharing\Controller;
 
-use OC\Security\CSP\ContentSecurityPolicy;
+use OC\ServerNotAvailableException;
 use OCA\DAV\Connector\Sabre\PublicAuth;
 use OCA\FederatedFileSharing\FederatedShareProvider;
-use OCA\Files_Sharing\Activity\Providers\Downloads;
 use OCA\Files_Sharing\Event\BeforeTemplateRenderedEvent;
 use OCA\Files_Sharing\Event\ShareLinkAccessedEvent;
 use OCP\Accounts\IAccountManager;
 use OCP\AppFramework\AuthPublicShareController;
+use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
+use OCP\AppFramework\Http\Attribute\NoSameSiteCookieRequired;
 use OCP\AppFramework\Http\Attribute\OpenAPI;
 use OCP\AppFramework\Http\Attribute\PublicPage;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\Http\NotFoundResponse;
 use OCP\AppFramework\Http\RedirectResponse;
-use OCP\AppFramework\Http\Response;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\Constants;
 use OCP\Defaults;
@@ -28,8 +29,8 @@ use OCP\EventDispatcher\IEventDispatcher;
 use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
-use OCP\Files\Node;
 use OCP\Files\NotFoundException;
+use OCP\Files\NotPermittedException;
 use OCP\HintException;
 use OCP\IConfig;
 use OCP\IL10N;
@@ -91,15 +92,7 @@ class ShareController extends AuthPublicShareController {
 
 		$this->eventDispatcher->dispatchTyped(new BeforeTemplateRenderedEvent($this->share, BeforeTemplateRenderedEvent::SCOPE_PUBLIC_SHARE_AUTH));
 
-		$response = new TemplateResponse('core', 'publicshareauth', $templateParameters, 'guest');
-		if ($this->share->getSendPasswordByTalk()) {
-			$csp = new ContentSecurityPolicy();
-			$csp->addAllowedConnectDomain('*');
-			$csp->addAllowedMediaDomain('blob:');
-			$response->setContentSecurityPolicy($csp);
-		}
-
-		return $response;
+		return new TemplateResponse('core', 'publicshareauth', $templateParameters, 'guest');
 	}
 
 	/**
@@ -110,15 +103,7 @@ class ShareController extends AuthPublicShareController {
 
 		$this->eventDispatcher->dispatchTyped(new BeforeTemplateRenderedEvent($this->share, BeforeTemplateRenderedEvent::SCOPE_PUBLIC_SHARE_AUTH));
 
-		$response = new TemplateResponse('core', 'publicshareauth', $templateParameters, 'guest');
-		if ($this->share->getSendPasswordByTalk()) {
-			$csp = new ContentSecurityPolicy();
-			$csp->addAllowedConnectDomain('*');
-			$csp->addAllowedMediaDomain('blob:');
-			$response->setContentSecurityPolicy($csp);
-		}
-
-		return $response;
+		return new TemplateResponse('core', 'publicshareauth', $templateParameters, 'guest');
 	}
 
 	/**
@@ -129,15 +114,7 @@ class ShareController extends AuthPublicShareController {
 
 		$this->eventDispatcher->dispatchTyped(new BeforeTemplateRenderedEvent($this->share, BeforeTemplateRenderedEvent::SCOPE_PUBLIC_SHARE_AUTH));
 
-		$response = new TemplateResponse('core', 'publicshareauth', $templateParameters, 'guest');
-		if ($this->share->getSendPasswordByTalk()) {
-			$csp = new ContentSecurityPolicy();
-			$csp->addAllowedConnectDomain('*');
-			$csp->addAllowedMediaDomain('blob:');
-			$response->setContentSecurityPolicy($csp);
-		}
-
-		return $response;
+		return new TemplateResponse('core', 'publicshareauth', $templateParameters, 'guest');
 	}
 
 	/**
@@ -198,7 +175,12 @@ class ShareController extends AuthPublicShareController {
 		}
 
 		// For share this was always set so it is still used in other apps
-		$this->session->set(PublicAuth::DAV_AUTHENTICATED, $this->share->getId());
+		$allowedShareIds = $this->session->get(PublicAuth::DAV_AUTHENTICATED);
+		if (!is_array($allowedShareIds)) {
+			$allowedShareIds = [];
+		}
+
+		$this->session->set(PublicAuth::DAV_AUTHENTICATED, array_merge($allowedShareIds, [$this->share->getId()]));
 	}
 
 	protected function authFailed() {
@@ -215,7 +197,7 @@ class ShareController extends AuthPublicShareController {
 	 * @param string $errorMessage
 	 *
 	 * @throws HintException
-	 * @throws \OC\ServerNotAvailableException
+	 * @throws ServerNotAvailableException
 	 *
 	 * @deprecated use OCP\Files_Sharing\Event\ShareLinkAccessedEvent
 	 */
@@ -253,9 +235,9 @@ class ShareController extends AuthPublicShareController {
 	 * Emit a ShareLinkAccessedEvent event when a share is accessed, downloaded, auth...
 	 */
 	protected function emitShareAccessEvent(IShare $share, string $step = '', int $errorCode = 200, string $errorMessage = ''): void {
-		if ($step !== self::SHARE_ACCESS &&
-			$step !== self::SHARE_AUTH &&
-			$step !== self::SHARE_DOWNLOAD) {
+		if ($step !== self::SHARE_ACCESS
+			&& $step !== self::SHARE_AUTH
+			&& $step !== self::SHARE_DOWNLOAD) {
 			return;
 		}
 		$this->eventDispatcher->dispatchTyped(new ShareLinkAccessedEvent($share, $step, $errorCode, $errorMessage));
@@ -339,152 +321,87 @@ class ShareController extends AuthPublicShareController {
 	}
 
 	/**
-	 * @NoSameSiteCookieRequired
-	 *
-	 * @param string $token
-	 * @param string|null $files
-	 * @param string $path
-	 * @return void|Response
 	 * @throws NotFoundException
 	 * @deprecated 31.0.0 Users are encouraged to use the DAV endpoint
 	 */
 	#[PublicPage]
 	#[NoCSRFRequired]
-	public function downloadShare($token, $files = null, $path = '') {
+	#[NoSameSiteCookieRequired]
+	public function downloadShare(string $token, ?string $files = null, string $path = ''): NotFoundResponse|RedirectResponse|DataResponse {
 		\OC_User::setIncognitoMode(true);
 
 		$share = $this->shareManager->getShareByToken($token);
 
 		if (!($share->getPermissions() & Constants::PERMISSION_READ)) {
-			return new DataResponse('Share has no read permission');
+			return new DataResponse('Share has no read permission', Http::STATUS_FORBIDDEN);
+		}
+
+		$attributes = $share->getAttributes();
+		if ($attributes?->getAttribute('permissions', 'download') === false) {
+			return new DataResponse('Share has no download permission', Http::STATUS_FORBIDDEN);
 		}
 
 		if (!$this->validateShare($share)) {
 			throw new NotFoundException();
 		}
 
-		// Single file share
-		if ($share->getNode() instanceof File) {
-			// Single file download
-			$this->singleFileDownloaded($share, $share->getNode());
+		if ($share->getHideDownload()) {
+			// download API does not work if hidden - use the DAV endpoint for previews
+			throw new NotFoundException();
 		}
-		// Directory share
-		else {
-			/** @var Folder $node */
-			$node = $share->getNode();
 
-			// Try to get the path
-			if ($path !== '') {
+		$node = $share->getNode();
+		if ($path !== '') {
+			if (!$node instanceof Folder) {
+				return new NotFoundResponse();
+			}
+
+			try {
+				$node = $node->get($path);
+			} catch (NotFoundException|NotPermittedException) {
+				$this->emitAccessShareHook($share, 404, 'Share not found');
+				$this->emitShareAccessEvent($share, self::SHARE_DOWNLOAD, 404, 'Share not found');
+				return new NotFoundResponse();
+			}
+		}
+
+		if ($files !== null) {
+			if (!$node instanceof Folder) {
+				return new NotFoundResponse();
+			}
+
+			$filesParam = json_decode($files, true);
+			if (!is_array($filesParam)) {
 				try {
-					$node = $node->get($path);
-				} catch (NotFoundException $e) {
+					// legacy wise this allows also passing the filename
+					$node = $node->get($files);
+					$files = null;
+				} catch (NotFoundException|NotPermittedException) {
 					$this->emitAccessShareHook($share, 404, 'Share not found');
 					$this->emitShareAccessEvent($share, self::SHARE_DOWNLOAD, 404, 'Share not found');
 					return new NotFoundResponse();
 				}
-			}
-
-			if ($node instanceof Folder) {
-				if ($files === null || $files === '') {
-					// The folder is downloaded
-					$this->singleFileDownloaded($share, $share->getNode());
-				} else {
-					$fileList = json_decode($files);
-					// in case we get only a single file
-					if (!is_array($fileList)) {
-						$fileList = [$fileList];
-					}
-					foreach ($fileList as $file) {
-						$subNode = $node->get($file);
-						$this->singleFileDownloaded($share, $subNode);
-					}
-				}
-			} else {
-				// Single file download
-				$this->singleFileDownloaded($share, $share->getNode());
 			}
 		}
 
 		$this->emitAccessShareHook($share);
 		$this->emitShareAccessEvent($share, self::SHARE_DOWNLOAD);
 
-		$davUrl = '/public.php/dav/files/' . $token . '/?accept=zip';
+		$davPath = '';
+		if ($node !== $share->getNode()) {
+			$davPath = substr($node->getPath(), strlen($share->getNode()->getPath()));
+		}
+
+		$params = [];
 		if ($files !== null) {
-			$davUrl .= '&files=' . $files;
+			$params['files'] = $files;
 		}
+		if ($node instanceof Folder) {
+			$params['accept'] = 'zip';
+		}
+
+		$davUrl = '/public.php/dav/files/' . $token . $davPath;
+		$davUrl .= '?' . http_build_query($params);
 		return new RedirectResponse($this->urlGenerator->getAbsoluteURL($davUrl));
-	}
-
-	/**
-	 * create activity if a single file was downloaded from a link share
-	 *
-	 * @param Share\IShare $share
-	 * @throws NotFoundException when trying to download a folder of a "hide download" share
-	 */
-	protected function singleFileDownloaded(IShare $share, Node $node) {
-		if ($share->getHideDownload() && $node instanceof Folder) {
-			throw new NotFoundException('Downloading a folder');
-		}
-
-		$fileId = $node->getId();
-
-		$userFolder = $this->rootFolder->getUserFolder($share->getSharedBy());
-		$userNode = $userFolder->getFirstNodeById($fileId);
-		$ownerFolder = $this->rootFolder->getUserFolder($share->getShareOwner());
-		$userPath = $userFolder->getRelativePath($userNode->getPath());
-		$ownerPath = $ownerFolder->getRelativePath($node->getPath());
-		$remoteAddress = $this->request->getRemoteAddress();
-		$dateTime = new \DateTime();
-		$dateTime = $dateTime->format('Y-m-d H');
-		$remoteAddressHash = md5($dateTime . '-' . $remoteAddress);
-
-		$parameters = [$userPath];
-
-		if ($share->getShareType() === IShare::TYPE_EMAIL) {
-			if ($node instanceof File) {
-				$subject = Downloads::SUBJECT_SHARED_FILE_BY_EMAIL_DOWNLOADED;
-			} else {
-				$subject = Downloads::SUBJECT_SHARED_FOLDER_BY_EMAIL_DOWNLOADED;
-			}
-			$parameters[] = $share->getSharedWith();
-		} else {
-			if ($node instanceof File) {
-				$subject = Downloads::SUBJECT_PUBLIC_SHARED_FILE_DOWNLOADED;
-				$parameters[] = $remoteAddressHash;
-			} else {
-				$subject = Downloads::SUBJECT_PUBLIC_SHARED_FOLDER_DOWNLOADED;
-				$parameters[] = $remoteAddressHash;
-			}
-		}
-
-		$this->publishActivity($subject, $parameters, $share->getSharedBy(), $fileId, $userPath);
-
-		if ($share->getShareOwner() !== $share->getSharedBy()) {
-			$parameters[0] = $ownerPath;
-			$this->publishActivity($subject, $parameters, $share->getShareOwner(), $fileId, $ownerPath);
-		}
-	}
-
-	/**
-	 * publish activity
-	 *
-	 * @param string $subject
-	 * @param array $parameters
-	 * @param string $affectedUser
-	 * @param int $fileId
-	 * @param string $filePath
-	 */
-	protected function publishActivity($subject,
-		array $parameters,
-		$affectedUser,
-		$fileId,
-		$filePath) {
-		$event = $this->activityManager->generateEvent();
-		$event->setApp('files_sharing')
-			->setType('public_links')
-			->setSubject($subject, $parameters)
-			->setAffectedUser($affectedUser)
-			->setObject('files', $fileId, $filePath);
-		$this->activityManager->publish($event);
 	}
 }
